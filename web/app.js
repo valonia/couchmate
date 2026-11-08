@@ -76,6 +76,9 @@ function fill(el, ...kids) {
 const sized = (el, w, hgt) => { el.style.width = `${w}px`; el.style.height = `${hgt}px`; return el; };
 
 const ICONS = {
+  guide: '<path d="M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/>',
+  bell: '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>',
+  bellOn: '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>',
   search: '<path d="M15.5 14h-.79l-.28-.27A6.47 6.47 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/>',
   settings: '<path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.47.47 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z"/>',
 };
@@ -153,6 +156,9 @@ const app = {
   renderToken: 0,
   tabTimers: [],
   favorites: [],
+  reminders: [],
+  favEpg: {},
+  favEpgAt: 0,
 };
 const serverNow = () => Date.now() + app.offset;
 
@@ -209,6 +215,18 @@ const cmd = {
   favAdd: (type, it, categoryName) => send({ type: 'fav_add', item: { type, id: it.id, name: it.name, icon: it.icon ?? null, ext: it.ext ?? '', categoryId: it.categoryId ?? null, categoryName: categoryName ?? it.categoryName ?? null } }),
   favRemove: (key) => send({ type: 'fav_remove', key }),
   favSeen: (key) => send({ type: 'fav_seen', key }),
+  reminderToggle: (ch, p, categoryName) => {
+    const key = `${ch.id}:${p.start}`;
+    if (app.reminders.some((r) => r.key === key)) send({ type: 'reminder_remove', key });
+    else send({
+      type: 'reminder_add',
+      channel: { id: ch.id, name: ch.name, icon: ch.icon ?? null, ext: ch.ext || 'ts', categoryId: ch.categoryId ?? null, categoryName: categoryName ?? ch.categoryName ?? null },
+      program: { title: p.title, desc: p.desc ?? null, start: p.start, end: p.end },
+    });
+  },
+  reminderRemove: (key) => send({ type: 'reminder_remove', key }),
+  reminderNow: () => send({ type: 'reminder_now' }),
+  reminderCancel: () => send({ type: 'reminder_cancel' }),
   nextNow: () => send({ type: 'next_now' }),
   nextCancel: () => send({ type: 'next_cancel' }),
 };
@@ -242,6 +260,11 @@ function connect() {
       app.offset = app.samples.reduce((a, b) => (b.rtt < a.rtt ? b : a)).off;
     } else if (m.type === 'state') onState(m.state);
     else if (m.type === 'members') { app.members = m.members || []; renderTop(); if (app.view === 'player') buildPlayerUI(); }
+    else if (m.type === 'reminders') {
+      app.reminders = m.reminders || [];
+      guideView?.refresh();
+      if (app.view === 'browse' && app.tab === 'favorites') renderMain();
+    }
     else if (m.type === 'favorites') {
       app.favorites = m.favorites || [];
       renderTop();
@@ -483,8 +506,124 @@ function channelRow(item, epgList, t, playing, { onclick, onfocus, categoryName,
       h('div', { class: 'name ellipsis' }, item.name, playing ? '  ▶' : ''),
       p && h('div', { class: 'prog ellipsis' }, `${hhmm(p.start)}  ${p.title}`),
       p && bar(progFrac(p, t))),
+    fav && guideButton(item, categoryName),
     fav && favButton('live', item, categoryName));
 }
+
+const reminderFor = (channelId, start) => app.reminders.find((r) => r.key === `${channelId}:${start}`);
+
+function guideButton(item, categoryName) {
+  const open = (e) => { e.stopPropagation(); e.preventDefault(); openGuide(item, categoryName); };
+  const b = h('span', {
+    class: 'fav-btn guide-btn', role: 'button', tabindex: '0', title: tr('Tablå och påminnelser', 'Guide and reminders'),
+    onclick: open, onkeydown: (e) => { if (e.key === 'Enter') open(e); },
+  });
+  b.append(icon('guide', 18));
+  return b;
+}
+
+// ---------------------------------------------------------------- tablå + påminnelser
+
+let guideView = null;
+
+function closeGuide() {
+  if (!guideView) return;
+  clearInterval(guideView.timer);
+  guideView.shade.remove();
+  guideView.panel.remove();
+  guideView = null;
+}
+
+function dayLabel(sec) {
+  const d = new Date(sec * 1000), today = new Date(), tomorrow = new Date(Date.now() + 86400e3);
+  const same = (a, b) => a.toDateString() === b.toDateString();
+  if (same(d, today)) return tr('Idag', 'Today');
+  if (same(d, tomorrow)) return tr('Imorgon', 'Tomorrow');
+  return d.toLocaleDateString(locale(), { weekday: 'long', day: 'numeric', month: 'long' });
+}
+
+/** Tablå för en kanal som en panel till höger. Klockan på ett program = påminnelse för hela rummet. */
+async function openGuide(ch, categoryName) {
+  closeGuide();
+  const list = h('div', { class: 'g-list' }, msg(tr('Hämtar tablån…', 'Loading the guide…')));
+  const panel = h('div', { class: 'guide', role: 'dialog' },
+    h('div', { class: 'g-head' },
+      thumb(ch.icon, ch.name, { cls: 'logo' }),
+      h('div', { style: { flex: '1', minWidth: '0' } },
+        h('div', { class: 'ellipsis', style: { fontSize: '20px', fontWeight: '700' } }, ch.name),
+        h('div', { class: 'faint', style: { fontSize: '13px', marginTop: '2px' } }, tr('Tablå · klockan = påminnelse för alla', 'Guide · bell = reminder for everyone'))),
+      h('button', { class: 'icon-btn', onclick: closeGuide, title: tr('Stäng (Esc)', 'Close (Esc)') }, '✕')),
+    h('div', { style: { padding: '0 22px 12px' } },
+      h('button', { class: 'btn primary', onclick: () => { cmd.load({ type: 'live', id: ch.id, ext: ch.ext || 'ts', title: ch.name, subtitle: categoryName ?? ch.categoryName ?? null, icon: ch.icon, categoryId: ch.categoryId }); closeGuide(); } },
+        tr('▶  Byt till kanalen nu', '▶  Switch to this channel now'))),
+    list);
+  const shade = h('div', { class: 'guide-shade', onclick: closeGuide });
+  document.body.append(shade, panel);
+  let programs = null, error = null;
+  const render = () => {
+    if (!programs) { if (error) fill(list, msg(tr(`Fel: ${error}`, `Error: ${error}`), true)); return; }
+    const t = nowSec();
+    const shown = programs.filter((p) => p.end > t);
+    if (!shown.length) { fill(list, msg(tr('Ingen tablå finns för den här kanalen.', "There's no guide for this channel."))); return; }
+    const top = list.scrollTop;
+    const kids = [];
+    let lastDay = null;
+    for (const p of shown) {
+      const day = dayLabel(p.start);
+      if (day !== lastDay) { lastDay = day; kids.push(h('div', { class: 'g-day' }, day)); }
+      const live = t >= p.start && t < p.end;
+      const r = reminderFor(ch.id, p.start);
+      const bell = !live && h('button', {
+        class: `bell-btn ${r ? 'on' : ''}`, onclick: () => cmd.reminderToggle(ch, p, categoryName),
+        title: r ? tr('Ta bort påminnelsen', 'Remove the reminder') : tr('Påminn: byt till kanalen när programmet börjar', 'Remind: switch to the channel when it starts'),
+      });
+      if (bell) bell.append(icon(r ? 'bellOn' : 'bell', 20));
+      kids.push(h('div', { class: `g-row ${live ? 'live' : ''} ${r ? 'reminded' : ''}` },
+        h('div', { class: 'g-time' }, h('b', {}, hhmm(p.start)), h('span', {}, `– ${hhmm(p.end)}`)),
+        h('div', { class: 'g-body' },
+          h('div', { class: 'g-title' }, live && h('span', { class: 'badge-live' }, tr('PÅGÅR', 'ON NOW')), h('span', { class: 'ellipsis' }, p.title)),
+          p.desc && h('div', { class: 'g-desc' }, p.desc),
+          live && bar(progFrac(p, t)),
+          r && h('div', { class: 'g-rem' }, tr(`Påminnelse · byter kanal strax innan${r.addedBy ? ` · av ${r.addedBy}` : ''}`, `Reminder · switches channel just before${r.addedBy ? ` · by ${r.addedBy}` : ''}`))),
+        bell));
+    }
+    list.replaceChildren(...kids);
+    list.scrollTop = top;
+  };
+  guideView = { panel, shade, refresh: render, timer: setInterval(render, 30000) };
+  try { programs = await api(`/api/live/guide?id=${enc(ch.id)}`); } catch (e) { error = e.message; }
+  if (guideView?.panel === panel) render();
+}
+
+// Esc stänger tablån före allt annat.
+document.addEventListener('keydown', (e) => {
+  if (guideView && e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); closeGuide(); }
+}, true);
+
+/** "Påminnelse: X börjar 21:00 – byter kanal om 23 s" (syns både i menyn och i spelaren). */
+const remCard = h('div', { class: 'rem-card', hidden: true });
+document.body.append(remCard);
+let remCardKey = null, remCountEl = null;
+function updateReminderCard() {
+  const r = app.room?.reminder;
+  if (!r || app.view === 'login') { remCard.hidden = true; remCardKey = null; return; }
+  const left = Math.max(0, Math.ceil((r.switchAt - serverNow()) / 1000));
+  if (r.key !== remCardKey) {
+    remCardKey = r.key;
+    const bellIcon = h('div', { class: 'rem-icon' });
+    bellIcon.append(icon('bellOn', 22));
+    fill(remCard, bellIcon, h('div', { style: { minWidth: '0', flex: '1' } },
+      remCountEl = h('div', { class: 'rem-count' }),
+      h('div', { class: 'ellipsis', style: { fontSize: '17px', fontWeight: '600', marginTop: '4px' } }, r.title),
+      h('div', { class: 'muted ellipsis', style: { fontSize: '14px', marginTop: '2px' } }, tr(`Börjar ${hhmm(r.start)} på ${r.channel?.name ?? ''}`, `Starts ${hhmm(r.start)} on ${r.channel?.name ?? ''}`)),
+      h('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } },
+        h('button', { class: 'btn primary', onclick: () => cmd.reminderNow() }, tr('Byt nu', 'Switch now')),
+        h('button', { class: 'btn', onclick: () => cmd.reminderCancel() }, tr('Avbryt', 'Cancel')))));
+  }
+  remCountEl.textContent = tr(`PÅMINNELSE · BYTER KANAL OM ${left} S`, `REMINDER · SWITCHING CHANNEL IN ${left} S`);
+  remCard.hidden = false;
+}
+setInterval(updateReminderCard, 500);
 
 async function renderLive(main, alive) {
   const chLabel = label('');
@@ -731,8 +870,24 @@ function renderFavorites(main) {
     h('span', { style: { fontSize: '24px', fontWeight: '700' } }, tr('Favoriter', 'Favourites')),
     h('span', { class: 'faint', style: { fontSize: '15px', marginLeft: '16px' } },
       tr('Gemensamma för alla i rummet  ·  Klicka på ★ för att ta bort', 'Shared with everyone in the room  ·  Click ★ to remove')));
+  const rems = app.reminders;
+  const remSection = rems.length > 0 && h('div', { style: { marginBottom: '22px' } },
+    h('div', { class: 'result-title' }, tr('Påminnelser', 'Reminders'), h('span', {}, `  ${rems.length}`)),
+    h('div', { style: { padding: '0 12px' } }, rems.map((r) => {
+      const x = h('span', { class: 'fav-btn on', role: 'button', tabindex: '0', title: tr('Ta bort påminnelsen', 'Remove the reminder'),
+        onclick: (e) => { e.stopPropagation(); cmd.reminderRemove(r.key); } }, '✕');
+      const bellIcon = h('span', { class: 'rem-bell' });
+      bellIcon.append(icon('bellOn', 18));
+      return h('button', { class: 'row rem-row', onclick: () => openGuide(r.channel, r.channel.categoryName), title: tr('Visa tablån för kanalen', "Show the channel's guide") },
+        bellIcon,
+        h('div', { class: 'rem-when' }, h('b', {}, `${dayLabel(r.start)} ${hhmm(r.start)}`), h('span', { class: 'faint' }, `– ${hhmm(r.end)}`)),
+        h('div', { style: { flex: '1', minWidth: '0' } },
+          h('div', { class: 'ellipsis', style: { fontWeight: '600' } }, r.title),
+          h('div', { class: 'ellipsis faint', style: { fontSize: '13px' } }, r.channel.name + (r.addedBy ? tr(` · av ${r.addedBy}`, ` · by ${r.addedBy}`) : ''))),
+        x);
+    })));
   if (!favs.length) {
-    fill(box, head, msg(tr(
+    fill(box, head, remSection || '', msg(tr(
       'Inga favoriter än. Klicka på ☆ på en serie, film eller kanal för att lägga till den. Kommer det nya avsnitt i en favoritserie markeras det här.',
       'No favourites yet. Click ☆ on a series, movie or channel to add it. New episodes of favourite series are marked here.')));
     return;
@@ -742,7 +897,17 @@ function renderFavorites(main) {
     h('div', { class: 'result-title' }, title, h('span', {}, `  ${list.length}`)),
     h('div', { class: 'hscroll' }, list.map(render)));
   const series = favs.filter((f) => f.type === 'series').sort((a, b) => (b.newCount || 0) - (a.newCount || 0));
-  fill(box, head, h('div', { class: 'scroll' },
+  // EPG för favoritkanalerna (hämtas högst varannan minut).
+  const liveIds = favs.filter((f) => f.type === 'live').map((f) => f.id);
+  if (liveIds.length && Date.now() - app.favEpgAt > 120000 && !app.favEpgLoading) {
+    app.favEpgLoading = true;
+    api(`/api/live/epg?ids=${liveIds.map(enc).join(',')}`)
+      .then((d) => { app.favEpg = d || {}; app.favEpgAt = Date.now(); if (app.view === 'browse' && app.tab === 'favorites') renderMain(); })
+      .catch(() => { app.favEpgAt = Date.now(); })
+      .finally(() => { app.favEpgLoading = false; });
+  }
+  const t = nowSec();
+  fill(box, head, h('div', { class: 'scroll' }, remSection,
     section(tr('Serier', 'Series'), series, (f) => posterCard(asItem(f),
       () => openSeries(box, asItem(f), f.categoryId, () => renderMain()), null,
       { type: 'series', caption: f.newCount ? tr(`Nytt: ${f.newLabel}`, `New: ${f.newLabel}`) : null })),
@@ -752,9 +917,19 @@ function renderFavorites(main) {
     section(tr('Kanaler', 'Channels'), favs.filter((f) => f.type === 'live'), (f) => h('button', {
       class: 'row chcard',
       onclick: () => cmd.load({ type: 'live', id: f.id, ext: f.ext || 'ts', title: f.name, subtitle: f.categoryName, icon: f.icon, categoryId: f.categoryId }),
-    }, thumb(f.icon, f.name), h('div', { style: { minWidth: '0', flex: '1' } },
-      h('div', { class: 'ellipsis', style: { fontWeight: '500' } }, f.name),
-      f.categoryName && h('div', { class: 'ellipsis', style: { fontSize: '13px', opacity: '.7' } }, f.categoryName)),
+    }, thumb(f.icon, f.name), (() => {
+      const progs = app.favEpg[f.id];
+      const cur = progNow(progs, t), nxt = progNext(progs, t);
+      const rem = nxt && reminderFor(f.id, nxt.start);
+      return h('div', { style: { minWidth: '0', flex: '1' } },
+        h('div', { class: 'ellipsis', style: { fontWeight: '500' } }, f.name),
+        progs ? [
+          h('div', { class: 'ellipsis', style: { fontSize: '13px', opacity: '.8', marginTop: '2px' } }, cur ? cur.title : tr('Ingen programinformation', 'No programme information')),
+          cur && bar(progFrac(cur, t)),
+          nxt && h('div', { class: `ellipsis ${rem ? 'gold' : 'faint'}`, style: { fontSize: '12px' } }, `${rem ? '🔔 ' : ''}${hhmm(nxt.start)}  ${nxt.title}`),
+        ] : f.categoryName && h('div', { class: 'ellipsis', style: { fontSize: '13px', opacity: '.7' } }, f.categoryName));
+    })(),
+    guideButton(asItem(f), f.categoryName),
     favButton('live', asItem(f), f.categoryName)))));
 }
 
@@ -1093,6 +1268,13 @@ function zap(dir) {
   if (i >= 0) loadChannel(ui.channels[(i + dir + ui.channels.length) % ui.channels.length]);
 }
 
+function openCurrentGuide() {
+  const m = app.room?.media;
+  if (!m || m.type !== 'live') return;
+  const ch = ui.channels.find((c) => c.id === m.id) || { id: m.id, name: m.title, icon: m.icon, ext: m.ext };
+  openGuide({ ...ch, categoryId: m.categoryId }, m.subtitle);
+}
+
 function toggleFullscreen() {
   if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
   else $('#player').requestFullscreen().catch(() => {});
@@ -1152,6 +1334,7 @@ function buildPlayerUI() {
           refs.liveProg)),
       h('div', { class: 'p-controls' },
         h('button', { class: 'icon-btn', onclick: openPanel, title: tr('Kanallista (Enter / ←)', 'Channel list (Enter / ←)') }, tr('☰ Kanaler', '☰ Channels')),
+        h('button', { class: 'icon-btn', onclick: openCurrentGuide, title: tr('Tablå och påminnelser (G)', 'Guide and reminders (G)') }, tr('📅 Tablå', '📅 Guide')),
         h('button', { class: 'icon-btn', onclick: () => zap(-1), title: tr('Föregående kanal (↑)', 'Previous channel (↑)') }, '▲'),
         h('button', { class: 'icon-btn', onclick: () => zap(1), title: tr('Nästa kanal (↓)', 'Next channel (↓)') }, '▼'),
         h('button', { class: 'icon-btn', onclick: () => { cmd.toggle(); pokeUI(); }, title: tr('Paus (mellanslag)', 'Pause (space)') }, st.paused ? '▶' : '❚❚'),
@@ -1309,6 +1492,7 @@ document.addEventListener('keydown', (e) => {
     case 'ArrowDown': e.preventDefault(); if (live) zap(1); break;
     case 'Enter': if (live && document.activeElement === document.body) { e.preventDefault(); openPanel(); } break;
     case 'f': case 'F': toggleFullscreen(); break;
+    case 'g': case 'G': if (live) openCurrentGuide(); break;
     case 'm': case 'M': video.muted = !video.muted; P.needsSound = false; buildPlayerUI(); break;
     case 'Escape': if (!document.fullscreenElement) closePlayer(); break;
   }

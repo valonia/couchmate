@@ -13,6 +13,7 @@ import { WebSocketServer } from 'ws';
 import { SharedVod } from './sharedvod.js';
 import { History } from './history.js';
 import { Favorites } from './favorites.js';
+import { Reminders } from './reminders.js';
 import { fileURLToPath } from 'node:url';
 
 // Webbklienten (hemsidan) ligger i ../web och serveras av samma server.
@@ -63,6 +64,7 @@ let shared = null;
 
 const history = new History(path.join(cfg.dataDir, 'history.json'));
 const favorites = new Favorites(path.join(cfg.dataDir, 'favorites.json'));
+const reminders = new Reminders(path.join(cfg.dataDir, 'reminders.json'));
 
 function sharedFor(type, id, ext) {
   const m = state.media;
@@ -194,8 +196,8 @@ const KINDS = {
 };
 
 // EPG (nu/nästa) per kanal via get_short_epg. Titlar är base64-kodade i Xtream.
-async function shortEpg(id) {
-  const d = await xtream({ action: 'get_short_epg', stream_id: id, limit: 6 });
+async function shortEpg(id, limit = 6) {
+  const d = await xtream({ action: 'get_short_epg', stream_id: id, limit });
   const seen = new Set();
   return asArray(d.epg_listings)
     .map((e) => ({
@@ -289,13 +291,19 @@ async function mapLimit(list, n, fn) {
 
 async function epgFor(ids) {
   const nowSec = Date.now() / 1000;
-  const lists = await mapLimit(ids, 12, shortEpg);
+  const lists = await mapLimit(ids, 12, (id) => shortEpg(id));
   const out = {};
   ids.forEach((id, k) => {
-    const l = (lists[k] || []).filter((e) => e.end > nowSec).slice(0, 3);
+    const l = (lists[k] || []).filter((e) => e.end > nowSec).slice(0, 4);
     if (l.length) out[id] = l;
   });
   return out;
+}
+
+/** Hela tablån för en kanal: pågående och kommande program (det Dispatcharr har, oftast ett par dygn). */
+async function guideFor(id) {
+  const nowSec = Date.now() / 1000;
+  return (await shortEpg(id, 200)).filter((e) => e.end > nowSec).slice(0, 80);
 }
 
 async function seriesInfo(id) {
@@ -405,6 +413,12 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/history') return json(res, 200, history.list());
 
     if (p === '/api/favorites') return json(res, 200, favorites.list());
+    if (p === '/api/reminders') return json(res, 200, reminders.list());
+    if (p === '/api/live/guide') {
+      const id = str(url.searchParams.get('id'));
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return json(res, 400, { error: 'Ogiltig kanal' });
+      return json(res, 200, await guideFor(id));
+    }
     if (p === '/api/search') {
       const q = clean(url.searchParams.get('q'), 100);
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 40));
@@ -458,6 +472,7 @@ const state = {
   changedBy: null,
   action: null,
   upNext: null, // { media, startsAt } – nästa avsnitt startar automatiskt vid startsAt
+  reminder: null, // { key, title, start, channel, switchAt } – byter kanal för alla vid switchAt
 };
 
 const clients = new Map(); // ws -> klientinfo
@@ -615,6 +630,7 @@ function handle(c, msg) {
       c.device = clean(msg.device, 40);
       send(c.ws, stateMsg());
       send(c.ws, { type: 'favorites', favorites: favorites.list() });
+      send(c.ws, { type: 'reminders', reminders: reminders.list() });
       broadcastMembers();
       console.log(`[rum] ${c.name} (${c.device || 'okänd enhet'}) anslöt`);
       break;
@@ -759,6 +775,54 @@ function handle(c, msg) {
       if (Number(msg.value) > 0) history.setDuration(state.media, Number(msg.value));
       break;
 
+    case 'reminder_add': {
+      const ch = msg.channel || {};
+      const pr = msg.program || {};
+      const id = str(ch.id);
+      const start = Math.floor(Number(pr.start));
+      const end = Math.floor(Number(pr.end));
+      if (!/^[A-Za-z0-9_-]{1,64}$/.test(id) || !(start > 0) || !(end > start) || end <= now() / 1000) return;
+      const added = reminders.add({
+        channel: {
+          id,
+          name: clean(ch.name, 200) || id,
+          icon: img(ch.icon),
+          ext: /^[A-Za-z0-9]{1,8}$/.test(str(ch.ext)) ? str(ch.ext) : cfg.liveExt,
+          categoryId: clean(ch.categoryId, 64) || null,
+          categoryName: clean(ch.categoryName, 200) || null,
+        },
+        title: clean(pr.title, 200) || '?',
+        desc: clean(pr.desc, 600) || null,
+        start,
+        end,
+      }, c.name);
+      if (added) {
+        broadcastReminders();
+        checkReminders();
+      }
+      break;
+    }
+
+    case 'reminder_remove': {
+      const key = str(msg.key);
+      if (reminders.remove(key)) broadcastReminders();
+      if (state.reminder?.key === key) clearReminder(true);
+      break;
+    }
+
+    case 'reminder_now':
+      if (state.reminder) playReminder(c.name);
+      break;
+
+    case 'reminder_cancel':
+      if (state.reminder) {
+        console.log(`[påminnelse] ${c.name} avbröt "${state.reminder.title}"`);
+        reminders.remove(state.reminder.key);
+        clearReminder(true);
+        broadcastReminders();
+      }
+      break;
+
     case 'history_remove':
       history.remove(str(msg.key));
       break;
@@ -887,6 +951,82 @@ async function checkEnded() {
   }
 }
 setInterval(checkEnded, 1000).unref();
+
+// ---------------------------------------------------------------- Påminnelser
+
+// Kanalen byts så här långt innan programmet börjar, och kortet "byter kanal om …" visas så här långt innan bytet.
+const REMINDER_SWITCH_SECONDS = Number(env.REMINDER_SWITCH_SECONDS || 30);
+const REMINDER_WARN_SECONDS = Number(env.REMINDER_WARN_SECONDS || 30);
+
+function broadcastReminders() {
+  broadcast({ type: 'reminders', reminders: reminders.list() });
+}
+
+function clearReminder(announce) {
+  if (!state.reminder) return;
+  state.reminder = null;
+  if (announce) {
+    state.version++;
+    state.action = 'reminder_clear';
+    broadcastState();
+  }
+}
+
+function playReminder(by) {
+  const r = (state.reminder && reminders.get(state.reminder.key)) || state.reminder;
+  if (!r) return;
+  const ch = r.channel;
+  const media = sanitizeMedia({ type: 'live', id: ch.id, ext: ch.ext || cfg.liveExt, title: ch.name, subtitle: ch.categoryName, icon: ch.icon, categoryId: ch.categoryId });
+  reminders.remove(r.key);
+  state.reminder = null;
+  broadcastReminders();
+  if (!media) return;
+  for (const o of clients.values()) if (o.name) o.watching = true;
+  mutate(by, 'load', () => {
+    state.media = media;
+    state.position = 0;
+    state.refTime = now();
+    state.paused = false;
+    state.waiting = false;
+  });
+  broadcastMembers();
+  console.log(`[påminnelse] bytte till ${ch.name} för "${r.title}"`);
+}
+
+/** Körs varje sekund: visar kortet när det närmar sig och byter kanal i tid. */
+function checkReminders() {
+  const nowMs = now();
+  const nowSec = nowMs / 1000;
+  if (reminders.prune(nowSec)) broadcastReminders();
+
+  if (state.reminder) {
+    if (nowMs >= state.reminder.switchAt) playReminder(null);
+    return;
+  }
+  for (const r of reminders.list()) {
+    const switchAt = (r.start - REMINDER_SWITCH_SECONDS) * 1000;
+    if (nowMs < switchAt - REMINDER_WARN_SECONDS * 1000) break; // sorterad lista – resten ligger längre fram
+    if (r.end <= nowSec) continue;
+    // Spelas kanalen redan behövs inget byte.
+    if (state.media?.type === 'live' && state.media.id === r.channel.id) {
+      reminders.remove(r.key);
+      broadcastReminders();
+      continue;
+    }
+    state.reminder = {
+      key: r.key, title: r.title, start: r.start, addedBy: r.addedBy,
+      channel: { id: r.channel.id, name: r.channel.name, icon: r.channel.icon },
+      // Har servern varit nere och tiden redan passerat: byt om några sekunder.
+      switchAt: Math.max(switchAt, nowMs + 5000),
+    };
+    state.version++;
+    state.action = 'reminder';
+    broadcastState();
+    console.log(`[påminnelse] "${r.title}" börjar snart – byter till ${r.channel.name}`);
+    return;
+  }
+}
+setInterval(checkReminders, 1000).unref();
 
 // ---------------------------------------------------------------- Favoriter: nya avsnitt
 
