@@ -1,0 +1,20 @@
+# Kör sync-servern bredvid Dispatcharr.
+# Om Dispatcharr ligger i samma compose-fil/nätverk: använd XTREAM_URL=http://dispatcharr:9191
+# Annars: XTREAM_URL=http://<ip-till-dispatcharr>:9191
+services:
+  synctv:
+    build: .
+    container_name: synctv
+    restart: unless-stopped
+    ports:
+      - "8787:8787"
+    env_file: .env
+    volumes:
+      # Tillfällig fil för filmen som spelas (raderas när ni byter). Behöver plats för en hel film.
+      - synctv-cache:/cache
+      # Historik (vad ni tittat på + var ni slutade) – sparas mellan omstarter.
+      - synctv-data:/data
+
+volumes:
+  synctv-cache:
+  synctv-data:

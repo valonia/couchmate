@@ -1,0 +1,17 @@
+{
+  "name": "synctv-server",
+  "version": "1.0.0",
+  "description": "Sync-server för Couchmates – gemensam uppspelning från Dispatcharr (Xtream)",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "mpegts.js": "^1.8.0",
+    "ws": "^8.18.0"
+  }
+}
