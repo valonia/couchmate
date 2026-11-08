@@ -966,7 +966,10 @@ setInterval(checkEnded, 1000).unref();
 
 const EPG_MERGE = {
   primaryUrl: env.EPG_PRIMARY_URL || '',
-  fallbackUrl: env.EPG_FALLBACK_URL || 'https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz',
+  // Reservkällor: en fil per land som visas i appen ("auto"), eller en egen lista, t.ex. "se,no".
+  countries: (env.EPG_FALLBACK_COUNTRIES || 'auto').toLowerCase(),
+  template: env.EPG_FALLBACK_TEMPLATE || 'https://epgshare01.online/epgshare01/epg_ripper_{CC}1.xml.gz',
+  extraUrls: str(env.EPG_FALLBACK_URL).split(',').map((u) => u.trim()).filter(Boolean),
   refreshMs: Number(env.EPG_MERGE_HOURS || 3) * 3600 * 1000,
   // Egna kopplingar om namnmatchningen inte räcker: "originalid=reservid,originalid2=reservid2"
   extraMap: Object.fromEntries(str(env.EPG_FALLBACK_MAP).split(',').map((x) => x.split('=').map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1])),
@@ -979,11 +982,31 @@ try {
   epgMergeState.builtAt = st.mtimeMs;
 } catch { /* ingen sparad tablå än */ }
 
+/** Länderna bland kanalerna som visas i appen, utifrån namnens ändelse ("V Sport Motor FHD SE" → "se"). */
+async function epgCountries() {
+  if (EPG_MERGE.countries !== 'auto') return EPG_MERGE.countries.split(',').map((c) => c.trim()).filter(Boolean);
+  try {
+    const counts = {};
+    for (const s of asArray(await xtream({ action: 'get_live_streams' }))) {
+      const m = /\b([A-Z]{2})\s*(?:\[[^\]]*\]\s*)*$/.exec(clean(s.name, 200));
+      if (m) counts[m[1].toLowerCase()] = (counts[m[1].toLowerCase()] || 0) + 1;
+    }
+    // Länder med minst tre kanaler (enstaka namn som råkar sluta på två versaler räknas inte).
+    const list = Object.entries(counts).filter(([, n]) => n >= 3).map(([c]) => c);
+    return list.length ? list : ['se'];
+  } catch {
+    return ['se'];
+  }
+}
+
 async function rebuildEpg() {
   if (epgMergeState.building) return epgMergeState.building;
   epgMergeState.building = (async () => {
     try {
-      const { xml, stats } = await buildMergedEpg({ ...EPG_MERGE });
+      const countries = await epgCountries();
+      const fallbackUrls = [...new Set([...countries.map((c) => EPG_MERGE.template.replace('{CC}', c.toUpperCase())), ...EPG_MERGE.extraUrls])];
+      const { xml, stats } = await buildMergedEpg({ primaryUrl: EPG_MERGE.primaryUrl, fallbackUrls, extraMap: EPG_MERGE.extraMap });
+      stats.countries = countries;
       const zlib = await import('node:zlib');
       const gz = zlib.gzipSync(xml);
       fs.mkdirSync(cfg.dataDir, { recursive: true });
