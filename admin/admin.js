@@ -22,6 +22,7 @@ const ICONS = {
   settings: 'M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.47.47 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z',
   data: 'M12 3C7.58 3 4 4.79 4 7v10c0 2.21 3.59 4 8 4s8-1.79 8-4V7c0-2.21-3.58-4-8-4zm0 2c3.87 0 6 1.5 6 2s-2.13 2-6 2-6-1.5-6-2 2.13-2 6-2zm6 12c0 .5-2.13 2-6 2s-6-1.5-6-2v-2.23c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V17zm0-5c0 .5-2.13 2-6 2s-6-1.5-6-2V9.77c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V12z',
   downloads: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
+  menu: 'M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z',
   plugins: 'M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z',
   logs: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
   account: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
@@ -138,6 +139,7 @@ const PAGES = [
   ['overview', 'Overview', renderOverview],
   ['settings', 'Settings', renderSettings],
   ['plugins', 'Plugins', renderPlugins],
+  ['menu', 'App menu', renderMenu],
   ['data', 'Reminders and data', renderData],
   ['downloads', 'Downloads', renderDownloads],
   ['logs', 'Log', renderLogs],
@@ -388,6 +390,45 @@ async function renderPlugins(main) {
     h('section', { class: 'card', style: { margin: '16px 0' } }, h('h3', {}, 'Ships with the server'), bundledEl),
     listEl);
   renderList();
+}
+
+// ---------------------------------------------------------------- app menu
+
+async function renderMenu(main) {
+  let entries = (await api('/menu')).entries;
+  const list = h('section', { class: 'card menu-list' });
+  const save = run(async () => {
+    entries = (await api('/menu', { method: 'PUT', body: { order: entries.map((e) => e.key), hidden: entries.filter((e) => e.hidden).map((e) => e.key) } })).entries;
+    draw();
+  });
+  const move = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= entries.length) return;
+    [entries[i], entries[j]] = [entries[j], entries[i]];
+    draw();
+    save();
+  };
+  const fixed = (label) => h('div', { class: 'menu-row fixed' }, h('span', { class: 'grow' }, label), h('span', { class: 'faint' }, 'always here'));
+  function draw() {
+    fill(list,
+      fixed('Search'),
+      entries.map((e, i) => {
+        const show = h('input', { type: 'checkbox', checked: !e.hidden, 'aria-label': `Show ${e.title}` });
+        show.addEventListener('change', () => { e.hidden = !show.checked; save(); });
+        return h('div', { class: `menu-row ${e.hidden || !e.available ? 'dim' : ''}` },
+          h('div', { class: 'arrows' },
+            h('button', { class: 'btn small', disabled: i === 0, 'aria-label': `Move ${e.title} up`, onclick: () => move(i, -1) }, '▲'),
+            h('button', { class: 'btn small', disabled: i === entries.length - 1, 'aria-label': `Move ${e.title} down`, onclick: () => move(i, 1) }, '▼')),
+          h('div', { class: 'grow' },
+            h('b', {}, e.title),
+            e.pluginName && h('span', { class: 'faint' }, `  ${e.pluginName}`),
+            !e.available && h('div', { class: 'faint', style: { fontSize: '13px' } }, 'Not shown right now – the plugin has nothing to show here.')),
+          h('label', { class: 'switch', title: 'Show in the app' }, show, h('span', {})));
+      }),
+      fixed('Settings'));
+  }
+  fill(main, head('App menu', 'The order of the menu in the apps. Search is always at the top and Settings always at the bottom. Switch an entry off to hide it. Plugins hide entries themselves when they have nothing to show.'), list);
+  draw();
 }
 
 // ---------------------------------------------------------------- data

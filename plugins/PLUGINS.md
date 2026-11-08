@@ -57,6 +57,7 @@ export default function setup(api) {
     name: 'YouTube',
     icon: 'M10 15l5-3-5-3z',                       // SVG path in a 24×24 box
     menu: [{ id: 'home', title: api.t('YouTube') }],  // optional – default: one entry named after the source
+                                                     // (or an async function – see "The menu")
 
     async screen(menuId, ctx) { /* → a screen */ },
     async data(name, params, ctx) { /* → lazy data for a screen */ },
@@ -73,6 +74,15 @@ export default function setup(api) {
   return () => { /* clean up when the plugin is switched off */ };
 }
 ```
+
+### The menu
+
+`menu` is a list of entries, or an (async) function that returns one. Use a function to leave out entries
+that have nothing to show right now – the IPTV plugin only shows Live TV, Movies and Series when Dispatcharr
+has any. Call `api.menuChanged()` when the answer may have changed; the apps reload their menu straight away.
+
+The admin decides the order in the admin panel (**App menu**) and can hide entries. Search is always at the
+top and Settings always at the bottom of the app menu; Favorites and History can be placed anywhere in between.
 
 Only `resolve` is required to play anything; add the rest as needed. `ctx.lang` is the device's language
 (e.g. `sv`), in case your source can return content in that language.
@@ -198,6 +208,7 @@ quality, audio and subtitles.
 | `api.cacheDir` | a folder for temporary files (emptied when the server starts) |
 | `api.route(method, path, handler, { auth })` | an HTTP endpoint at `/plugins/<id><path>`. A path ending in `/*` matches everything below it. `auth`: `'pin'` (default – the apps), `'admin'` (logged in to the admin panel) or `'public'`. `handler(req, res, { path, query })` |
 | `api.proxy(req, res, url, headers?)` | passes an upstream response on, with Range support (seeking) |
+| `api.menuChanged()` | the menu (from a `menu()` function) may have changed – it is fetched again and the apps update |
 | `api.link(label, url)` | a link on the plugin's card in the admin panel, e.g. a status page |
 | `api.on(event, fn)` | events: `load`, `play`, `pause`, `seek`, `stop`, `ended`, `member_join`, `member_leave`, `reminder`, `state` |
 | `api.room` | `state()`, `members()`, `load({ plugin, id, title… })`, `play()`, `pause()`, `seek(seconds)`, `stop()`, `notify(text)` |

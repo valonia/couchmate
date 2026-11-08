@@ -52,6 +52,10 @@ export class PluginHost {
     this.state = out;
     fs.writeFileSync(this.stateFile, JSON.stringify(out, null, 1));
     // Something was installed, switched on/off or removed – the apps reload their menu straight away.
+    this.notify();
+  }
+
+  notify() {
     for (const fn of this.listeners.change) { try { fn(); } catch { /* listener gone */ } }
   }
 
@@ -110,6 +114,7 @@ export class PluginHost {
     p.routes = [];
     p.links = [];
     p.source = null;
+    p.menuCache = [];
   }
 
   async start(p) {
@@ -140,6 +145,8 @@ export class PluginHost {
       /** A link on the plugin's card in the admin panel, e.g. a status page served with api.route(…, { auth: 'admin' }). */
       link: (label, url) => p.links.push({ label: clean(label, 60), url: clean(url, 500) }),
       source: (def) => { p.source = def; },
+      /** Call when what source.menu() returns has changed (e.g. content appeared) – the apps reload their menu. */
+      menuChanged: () => this.refreshMenu(p, false),
       /** Passes an upstream response on to the app, with Range support (seeking): api.proxy(req, res, url, extraHeaders). */
       proxy: (req, res, url, headers) => proxy(req, res, url, headers),
       room: this.room,
@@ -148,6 +155,7 @@ export class PluginHost {
       const cleanup = await p.setup(api);
       p.cleanup = typeof cleanup === 'function' ? cleanup : null;
       this.log(`[plugin] ${p.meta?.name || p.id} started`);
+      this.refreshMenu(p, false);
     } catch (e) {
       p.error = e.message;
       this.stop(p);
@@ -307,19 +315,38 @@ export class PluginHost {
 
   has(id, fn) { return typeof this.source(id)?.[fn] === 'function'; }
 
-  /** Menu entries from every enabled plugin, in install order. */
+  /**
+   * Works out a plugin's menu entries. source.menu is a list, or a (async) function returning one – so a plugin
+   * can leave out entries that have nothing to show. Without menu: one entry named after the source.
+   */
+  async refreshMenu(p, announce) {
+    const src = p.enabled && p.source;
+    if (!src) return;
+    let entries;
+    if (typeof src.menu === 'function') {
+      try {
+        entries = await withTimeout(src.menu(), 60000, 'menu() did not answer in time');
+      } catch (e) {
+        this.log(`[plugin] ${p.id}: menu – ${e.message}`);
+        entries = [];
+      }
+    } else entries = Array.isArray(src.menu) && src.menu.length ? src.menu : [{ id: 'home', title: src.name || p.meta?.name || p.id, icon: src.icon }];
+    if (p.source !== src) return; // restarted meanwhile
+    const next = [];
+    for (const e of (Array.isArray(entries) ? entries : []).slice(0, 8)) {
+      const id = /^[A-Za-z0-9_-]{1,32}$/.test(str(e?.id)) ? str(e.id) : null;
+      if (!id || next.some((x) => x.id === id)) continue;
+      next.push({ plugin: p.id, id, title: text(e.title, 40) || p.meta?.name || p.id, icon: clean(e.icon || src.icon, 4000) || null });
+    }
+    const changed = JSON.stringify(next) !== JSON.stringify(p.menuCache || []);
+    p.menuCache = next;
+    if (changed || announce) this.notify();
+  }
+
+  /** Menu entries from every enabled plugin, in install order (the server applies the admin's order). */
   menu() {
     const out = [];
-    for (const p of this.plugins.values()) {
-      const src = p.enabled && p.source;
-      if (!src) continue;
-      const entries = Array.isArray(src.menu) && src.menu.length ? src.menu : [{ id: 'home', title: src.name || p.meta?.name || p.id, icon: src.icon }];
-      for (const e of entries.slice(0, 8)) {
-        const id = /^[A-Za-z0-9_-]{1,32}$/.test(str(e.id)) ? str(e.id) : null;
-        if (!id) continue;
-        out.push({ plugin: p.id, id, title: text(e.title, 40) || p.meta?.name || p.id, icon: clean(e.icon || src.icon, 4000) || null });
-      }
-    }
+    for (const p of this.plugins.values()) if (p.enabled && p.source) out.push(...(p.menuCache || []));
     return out;
   }
 

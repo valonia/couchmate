@@ -20,6 +20,7 @@ import { PluginHost } from './plugins.js';
 import { Streams } from './streams.js';
 import { Room } from './room.js';
 import { Translator } from './i18n.js';
+import { MenuLayout } from './menu.js';
 import { createAdmin } from './admin.js';
 import { json, readJson, clean, str, SAFE_ID } from './util.js';
 
@@ -46,6 +47,7 @@ updateSecrets();
 const history = new History(path.join(cfg.dataDir, 'history.json'));
 const favorites = new Favorites(path.join(cfg.dataDir, 'favorites.json'));
 const reminders = new Reminders(path.join(cfg.dataDir, 'reminders.json'));
+const menuLayout = new MenuLayout(path.join(cfg.dataDir, 'menu.json'));
 const translator = new Translator(path.join(cfg.dataDir, 'translations.json'), {
   engine: null, // the translation engine is plugged in here (see i18n.js)
   enabled: () => Boolean(settings.get('translation')),
@@ -70,7 +72,10 @@ plugins.onChange(() => {
   room.broadcast({ type: 'menu_changed' }); // the apps reload their menu straight away
 });
 
-const admin = createAdmin({ dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, version: VERSION });
+const admin = createAdmin({
+  dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, version: VERSION,
+  menuChanged: () => room.broadcast({ type: 'menu_changed' }),
+});
 
 settings.onChange((changed) => {
   if (changed.includes('pin')) {
@@ -168,7 +173,7 @@ const server = http.createServer(async (req, res) => {
 
     let m;
     if (p === '/api/auth') return json(res, 200, { ok: true, name: settings.get('serverName') || 'Couchmate' });
-    if (p === '/api/menu') return localized(res, url, plugins.menu());
+    if (p === '/api/menu') return localized(res, url, menuLayout.apply(plugins.menu()));
     if ((m = p.match(/^\/api\/screen\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,32})$/))) {
       if (!plugins.has(m[1], 'screen')) return json(res, 404, { error: 'No such screen' });
       return localized(res, url, plugins.screen(m[1], await plugins.call(m[1], 'screen', [m[2], ctxOf(url)], 30000)));

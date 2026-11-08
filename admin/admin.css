@@ -185,3 +185,13 @@ body.dl .howto b { color: var(--text); }
 .bundled-list { display: grid; gap: 10px; }
 .bundled { display: flex; align-items: center; gap: 16px; padding: 10px 12px; border-radius: 10px; background: var(--panel-hi); }
 .bundled .grow { flex: 1; min-width: 0; }
+
+/* ---------- app menu order */
+.menu-list { display: grid; gap: 8px; max-width: 640px; }
+.menu-row { display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 10px; background: var(--panel-hi); }
+.menu-row .grow { flex: 1; min-width: 0; }
+.menu-row.fixed { background: none; border: 1px dashed var(--line); color: var(--faint); }
+.menu-row.dim b { color: var(--faint); }
+.menu-row .arrows { display: flex; gap: 4px; }
+.menu-row .arrows .btn { padding: 4px 10px; }
+.menu-row .arrows .btn:disabled { opacity: .3; cursor: default; }

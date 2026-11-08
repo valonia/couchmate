@@ -192,6 +192,18 @@ export function createAdmin(ctx) {
       return json(res, 200, { ok: true });
     }
 
+    // ---- the app menu
+    if (sub === '/menu' && method === 'GET') {
+      const names = Object.fromEntries(plugins.list().map((p) => [p.id, p.name]));
+      return json(res, 200, { entries: ctx.menuLayout.forAdmin(plugins.menu(), names) });
+    }
+    if (sub === '/menu' && method === 'PUT') {
+      ctx.menuLayout.update(await readJson(req));
+      ctx.menuChanged();
+      const names = Object.fromEntries(plugins.list().map((p) => [p.id, p.name]));
+      return json(res, 200, { entries: ctx.menuLayout.forAdmin(plugins.menu(), names) });
+    }
+
     // ---- settings
     if (sub === '/settings' && method === 'GET') return json(res, 200, { groups: GROUPS, settings: settings.forAdmin() });
     if (sub === '/settings' && method === 'PUT') {

@@ -450,11 +450,17 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
   api.source({
     name: 'IPTV',
     icon: ICONS.live,
-    menu: [
-      { id: 'live', title: api.t('Live TV'), icon: ICONS.live },
-      { id: 'movies', title: api.t('Movies'), icon: ICONS.movies },
-      { id: 'series', title: api.t('Series'), icon: ICONS.series },
-    ],
+    // Only the entries that have something to show (none until Dispatcharr is set up).
+    async menu() {
+      if (!configured) return [];
+      const entries = [
+        { id: 'live', title: api.t('Live TV'), icon: ICONS.live },
+        { id: 'movies', title: api.t('Movies'), icon: ICONS.movies },
+        { id: 'series', title: api.t('Series'), icon: ICONS.series },
+      ];
+      const counts = await Promise.all(entries.map((e) => catalog(e.id).then((l) => l.length).catch(() => 0)));
+      return entries.filter((_, i) => counts[i] > 0);
+    },
     player: VOD_PLAYER,
 
     async screen(menu) {
@@ -548,7 +554,9 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
 
   // Warm up the search catalogue so the first search is quick (and keep it warm).
   if (configured) {
-    const warm = () => { for (const kind of Object.keys(KINDS)) catalog(kind).catch((e) => api.log(`catalogue ${kind}: ${e.message}`)); };
+    // When the catalogue changes (e.g. the first movies appear), the menu follows.
+    const warm = () => Promise.all(Object.keys(KINDS).map((kind) => catalog(kind).catch((e) => api.log(`catalogue ${kind}: ${e.message}`))))
+      .then(() => api.menuChanged());
     later(2000, warm);
     every(SEARCH_TTL - 60_000, warm);
   } else {
