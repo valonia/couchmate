@@ -1,0 +1,9 @@
+{
+  "id": "twitch",
+  "name": "Twitch",
+  "version": "1.0.0",
+  "description": "Twitch i Couchmates: populära liveströmmar i menyn, Twitch-träffar i sök och liveströmmar som spelas synkat för alla.",
+  "main": "index.mjs",
+  "requires": "Internetanslutning från servern till twitch.tv. Ingen extra Docker-container eller Twitch-konto behövs.",
+  "homepage": "https://github.com/valonia/couchmates/tree/main/server/plugins/twitch"
+}

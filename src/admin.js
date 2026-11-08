@@ -302,9 +302,9 @@ export function createAdmin(ctx) {
     }
     if (sub === '/plugins/upload' && method === 'PUT') {
       const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
-      const code = (await readBody(req, 2 * 1024 * 1024)).toString('utf8');
+      const body = await readBody(req, 50 * 1024 * 1024);
       try {
-        const p = await plugins.install(name, code);
+        const p = /\.zip$/i.test(name) ? await plugins.installZip(name, body) : await plugins.install(name, body.toString('utf8'));
         console.log(`[admin] plugin installerat: ${p.id}`);
         return json(res, 200, { plugins: plugins.list() });
       } catch (e) { return json(res, 400, { error: e.message }); }

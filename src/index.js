@@ -413,6 +413,20 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/favorites') return json(res, 200, favorites.list());
     if (p === '/api/reminders') return json(res, 200, reminders.list());
+    // ---- källor från plugins (t.ex. Twitch)
+    if (p === '/api/sources') return json(res, 200, plugins.sources());
+    if ((m = p.match(/^\/api\/sources\/([a-z0-9_-]{1,64})\/(browse|search)$/))) {
+      try {
+        if (m[2] === 'browse') return json(res, 200, normBrowse(m[1], await plugins.callSource(m[1], 'browse')));
+        const q = clean(url.searchParams.get('q'), 100);
+        return json(res, 200, normItems(m[1], await plugins.callSource(m[1], 'search', [q])));
+      } catch (e) {
+        return json(res, 502, { error: e.message });
+      }
+    }
+    if ((m = p.match(/^\/stream\/plugin\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_.:%-]{1,200})\.m3u8$/))) {
+      return pluginStream(res, m[1], decodeURIComponent(m[2]));
+    }
     // Sammanslagen tablå för Dispatcharr: originalet först, reservkällan fyller luckorna.
     if (p === '/epg/merged.xml' || p === '/epg/merged.xml.gz') {
       if (!EPG_MERGE.primaryUrl) return json(res, 404, { error: 'EPG_PRIMARY_URL är inte satt' });
@@ -430,7 +444,8 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/search') {
       const q = clean(url.searchParams.get('q'), 100);
       const limit = Math.min(100, Math.max(1, Number(url.searchParams.get('limit')) || 40));
-      return json(res, 200, await search(q, limit));
+      const [found, fromSources] = await Promise.all([search(q, limit), searchSources(q)]);
+      return json(res, 200, { ...found, sources: fromSources });
     }
     if (p === '/api/live/epg') {
       // ?ids=1,2,3  eller  ?category_id=X (alla kanaler i kategorin)
@@ -494,7 +509,7 @@ let saveRoomTimer = null;
 function writeRoom() {
   try {
     fs.mkdirSync(cfg.dataDir, { recursive: true });
-    const live = state.media?.type === 'live';
+    const live = isLiveMedia(state.media);
     fs.writeFileSync(ROOM_FILE, JSON.stringify({
       media: state.media,
       position: live ? 0 : currentPosition(),
@@ -520,14 +535,14 @@ function restoreRoom() {
   state.refTime = Date.now();
   state.changedBy = r.changedBy || null;
   state.action = 'restore';
-  if (media.type === 'live') {
+  if (isLiveMedia(media)) {
     state.position = 0;
     state.paused = false;
   } else {
     state.position = Math.max(0, Number(r.position) || 0);
     state.paused = true;
   }
-  console.log(`[rum] återställde "${media.title}" (${media.type === 'live' ? 'live' : `pausad på ${Math.round(state.position)} s`})`);
+  console.log(`[rum] återställde "${media.title}" (${isLiveMedia(media) ? 'live' : `pausad på ${Math.round(state.position)} s`})`);
 }
 
 for (const sig of ['SIGTERM', 'SIGINT']) {
@@ -612,7 +627,23 @@ function checkReady() {
   if (required.every((c) => c.readyVersion === state.version)) startPlayback('ready');
 }
 
+/** Live = TV-kanaler och liveströmmar från plugin-källor (ingen spolning, ingen väntan). */
+const isLiveMedia = (m) => Boolean(m) && (m.type === 'live' || (m.type === 'plugin' && m.live));
+
 function sanitizeMedia(m) {
+  if (m?.type === 'plugin') {
+    // Från en plugin-källa: id = "källa:objekt", t.ex. "twitch:lofigirl"
+    const id = str(m.id);
+    const mm = /^([a-z0-9][a-z0-9_-]{0,63}):([A-Za-z0-9_.:-]{1,128})$/.exec(id);
+    if (!mm) return null;
+    const media = {
+      type: 'plugin', id, ext: 'm3u8', source: mm[1], live: Boolean(m.live),
+      title: clean(m.title, 200) || mm[2], subtitle: clean(m.subtitle, 200) || null,
+      icon: /^https:\/\//.test(str(m.icon)) ? clean(m.icon, 1000) : null, categoryId: null, seriesId: null,
+    };
+    media.url = `/stream/plugin/${mm[1]}/${encodeURIComponent(mm[2])}.m3u8` + (cfg.pin ? `?pin=${encodeURIComponent(cfg.pin)}` : '');
+    return media;
+  }
   if (!m || !['live', 'movie', 'episode'].includes(m.type)) return null;
   const id = str(m.id);
   const ext = str(m.ext) || (m.type === 'live' ? cfg.liveExt : 'mp4');
@@ -633,7 +664,7 @@ function sanitizeMedia(m) {
 }
 
 function handle(c, msg) {
-  const isLive = state.media?.type === 'live';
+  const isLive = isLiveMedia(state.media);
   switch (msg.type) {
     case 'hello':
       c.name = clean(msg.name, 40) || 'Gäst';
@@ -673,7 +704,7 @@ function handle(c, msg) {
       mutate(c.name, 'load', () => {
         state.media = media;
         state.refTime = now();
-        if (media.type === 'live') {
+        if (isLiveMedia(media)) {
           state.position = 0;
           state.paused = false;
           state.waiting = false;
@@ -731,7 +762,7 @@ function handle(c, msg) {
       c.position = pos;
       c.status = clean(msg.status, 60) || null;
       c.reportedAt = now();
-      if (state.media && state.media.type !== 'live' && !state.waiting) {
+      if (state.media && !isLiveMedia(state.media) && !state.waiting) {
         const expected = state.paused || at < state.refTime ? state.position : state.position + (at - state.refTime) / 1000;
         c.drift = Math.round((pos - expected) * 1000) / 1000;
       } else c.drift = null;
@@ -1047,6 +1078,89 @@ if (EPG_MERGE.primaryUrl) {
   setTimeout(() => { if (!epgMergeState.gz || Date.now() - epgMergeState.builtAt > EPG_MERGE.refreshMs) rebuildEpg(); }, 5000).unref();
 }
 scheduleEpg();
+
+// ---------------------------------------------------------------- Källor från plugins
+
+/** Gör om ett objekt från en källa till det apparna förväntar sig (id blir "källa:objekt"). */
+function normItem(source, it) {
+  const id = str(it?.id);
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(id)) return null;
+  return {
+    id: `${source}:${id}`,
+    name: clean(it.title, 200) || id,
+    subtitle: clean(it.subtitle, 200) || null,
+    icon: /^https:\/\//.test(str(it.image)) ? clean(it.image, 1000) : null,
+    live: Boolean(it.live),
+    viewers: Number(it.viewers) > 0 ? Math.round(Number(it.viewers)) : null,
+    source,
+  };
+}
+const normItems = (source, list) => (Array.isArray(list) ? list : []).map((it) => normItem(source, it)).filter(Boolean).slice(0, 200);
+function normBrowse(source, d) {
+  const sections = Array.isArray(d?.sections) ? d.sections : [];
+  return {
+    message: clean(d?.message, 500) || null,
+    sections: sections.slice(0, 20).map((s, i) => ({ id: clean(s.id, 64) || String(i), title: clean(s.title, 120) || '', items: normItems(source, s.items) })),
+  };
+}
+
+/** Sök i alla källor samtidigt (de som inte svarar inom 6 s hoppas över). */
+async function searchSources(q) {
+  if (str(q).trim().length < 2) return [];
+  const list = plugins.sources();
+  const results = await Promise.all(list.map(async (s) => {
+    try {
+      return { id: s.id, name: s.name, items: normItems(s.id, await plugins.callSource(s.id, 'search', [q], 6000)).slice(0, 30) };
+    } catch (e) {
+      console.warn(`[källa] ${s.name}: sökningen misslyckades – ${e.message}`);
+      return null;
+    }
+  }));
+  return results.filter((r) => r && r.items.length);
+}
+
+// Strömadresser från källor gäller en stund (Twitch: ca 20 min) – spara dem så att spelarnas
+// återkommande hämtningar av spellistan går snabbt.
+const resolved = new Map(); // "källa:objekt" → { url, t }
+const RESOLVE_TTL = 8 * 60 * 1000;
+
+async function resolveSource(source, item, fresh = false) {
+  const key = `${source}:${item}`;
+  const hit = resolved.get(key);
+  if (!fresh && hit && Date.now() - hit.t < RESOLVE_TTL) return hit.url;
+  const r = await plugins.callSource(source, 'resolve', [item], 20000);
+  const u = str(r?.url);
+  if (!/^https?:\/\//.test(u)) throw new Error('Källan gav ingen ström (sänder kanalen just nu?)');
+  resolved.set(key, { url: u, t: Date.now() });
+  return u;
+}
+
+/** Hämtar källans HLS-spellista och skickar den vidare med fullständiga adresser. */
+async function pluginStream(res, source, item) {
+  try {
+    let upstream = await resolveSource(source, item);
+    let r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
+    if (!r.ok) {
+      // Adressen har troligen gått ut – hämta en ny.
+      upstream = await resolveSource(source, item, true);
+      r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
+    }
+    if (!r.ok) throw new Error(`strömmen svarade ${r.status}`);
+    const base = r.url || upstream;
+    const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
+    const body = (await r.text()).split('\n').map((line) => {
+      const t = line.trim();
+      if (!t) return line;
+      if (!t.startsWith('#')) return abs(t);
+      return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${abs(u)}"`);
+    }).join('\n');
+    res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' });
+    res.end(body);
+  } catch (e) {
+    console.warn(`[källa] ${source}:${item} – ${e.message}`);
+    json(res, 502, { error: e.message });
+  }
+}
 
 // ---------------------------------------------------------------- Påminnelser
 

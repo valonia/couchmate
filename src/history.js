@@ -44,7 +44,8 @@ export class History {
       startedBy: by,
       startedAt: Date.now(),
       lastAt: Date.now(),
-      position: media.type === 'live' ? 0 : position,
+      position: media.type === 'live' || media.live ? 0 : position,
+      live: media.live ?? undefined,
       duration: old?.duration ?? null,
     };
     this.entries = [entry, ...this.entries.filter((e) => e.key !== key)].slice(0, this.max);

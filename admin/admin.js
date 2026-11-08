@@ -423,7 +423,7 @@ async function renderDownloads(main) {
 async function renderPlugins(main) {
   let d = await api('/plugins');
   const listEl = h('div', { class: 'grid' });
-  const picker = h('input', { type: 'file', accept: '.mjs,.js', hidden: true, onchange: run(async () => {
+  const picker = h('input', { type: 'file', accept: '.zip,.mjs,.js', hidden: true, onchange: run(async () => {
     const f = picker.files[0];
     if (!f) return;
     d = { ...d, ...(await api(`/plugins/upload?name=${encodeURIComponent(f.name)}`, { method: 'PUT', raw: f })) };
@@ -462,7 +462,10 @@ async function renderPlugins(main) {
     return h('section', { class: 'card plugin' },
       h('div', { class: 'top' },
         h('div', { class: 'grow' }, h('div', { class: 'name' }, p.name, p.version && h('span', { class: 'faint', style: { fontWeight: 400, fontSize: '13px' } }, `  v${p.version}`)),
-          h('div', { class: 'meta' }, h('code', {}, `${p.id}.mjs`)), p.description && h('p', { class: 'muted', style: { margin: '6px 0 0' } }, p.description)),
+          h('div', { class: 'meta' }, h('code', {}, p.kind === 'zip' ? `${p.id}/ (zip)` : `${p.id}.mjs`), p.source && h('span', { class: 'pill ok', style: { marginLeft: '8px' } }, `i appens meny: ${p.source.name}`)),
+          p.description && h('p', { class: 'muted', style: { margin: '6px 0 0' } }, p.description),
+          p.requires && h('p', { class: 'faint', style: { margin: '4px 0 0', fontSize: '13px' } }, `Kräver: ${p.requires}`),
+          p.homepage && h('a', { href: p.homepage, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, 'Läs mer ↗')),
         h('label', { class: 'switch' }, toggle, h('span', {}))),
       p.error && h('p', { class: 'error', style: { margin: 0 } }, `Fel: ${p.error}`),
       p.enabled && (p.events.length || p.routes.length) ? h('div', { class: 'chips' },
@@ -475,8 +478,8 @@ async function renderPlugins(main) {
     fill(listEl, d.plugins.length ? d.plugins.map(pluginCard) : h('p', { class: 'empty' }, 'Inga plugins installerade än. Installera ett exempel ovan eller ladda upp en egen .mjs-fil.'));
   }
   fill(main,
-    head('Plugins', 'Utöka servern med egna funktioner. Ett plugin är en .mjs-fil som kan reagera på händelser, lägga till egna sidor och ha egna inställningar.',
-      h('button', { class: 'btn primary', onclick: () => picker.click() }, 'Ladda upp plugin (.mjs)'), picker),
+    head('Plugins', 'Utöka servern med egna funktioner. Ett plugin är en zip-fil (eller en enskild .mjs-fil) som kan lägga till källor i appens meny, reagera på händelser, lägga till egna sidor och ha egna inställningar.',
+      h('button', { class: 'btn primary', onclick: () => picker.click() }, 'Ladda upp plugin (.zip eller .mjs)'), picker),
     h('p', { class: 'notice' }, h('b', {}, 'Bra att veta: '), 'plugins körs med samma rättigheter som servern. Installera bara plugins som du själv har skrivit eller litar på. Nya plugins är avstängda tills du slår på dem.'),
     h('section', { class: 'card', style: { margin: '16px 0' } }, h('h3', {}, 'Exempel att utgå från'), examples,
       h('details', { style: { marginTop: '12px' } }, h('summary', {}, 'Hur skriver man ett plugin?'), h('pre', { class: 'log', style: { height: 'auto', minHeight: 0, marginTop: '10px' } },
