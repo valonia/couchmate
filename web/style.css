@@ -59,14 +59,41 @@ input { font: inherit; }
 }
 #login-form input:focus { border-color: #fff; outline: none; }
 
-/* ---------- toppfält */
-#browse { height: 100%; display: flex; flex-direction: column; }
+/* ---------- menyn till vänster (fälls ut över innehållet) */
+#browse { height: 100%; display: flex; flex-direction: column; position: relative; }
 #topbar {
-  display: flex; align-items: center; gap: 6px;
-  padding: 18px 32px 12px; flex-wrap: wrap;
+  position: absolute; top: 0; bottom: 0; left: 0; z-index: 40; width: 72px; overflow: hidden;
+  display: flex; flex-direction: column; gap: 4px; padding: 16px 10px;
+  background: var(--panel); transition: width .18s ease, box-shadow .18s ease;
 }
-#topbar .brand { font-size: 26px; font-weight: 700; margin-right: 26px; }
+#topbar:hover, #topbar:focus-within { width: 240px; box-shadow: 0 0 48px rgba(0, 0, 0, .65); }
+#topbar .brand { display: flex; align-items: center; gap: 14px; font-size: 22px; font-weight: 700; padding: 0 8px 20px; white-space: nowrap; }
+.brand-logo {
+  width: 36px; height: 36px; flex: none; border-radius: 9px;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23122046'/%3E%3Crect x='8' y='7' width='16' height='11' rx='3' fill='%233d7bff'/%3E%3Crect x='4' y='14' width='6' height='12' rx='2.5' fill='%232f63d6'/%3E%3Crect x='22' y='14' width='6' height='12' rx='2.5' fill='%232f63d6'/%3E%3Crect x='9' y='18' width='14' height='6' rx='2' fill='%235b92ff'/%3E%3Cpath d='M14 9.5v6l5-3z' fill='%23fff'/%3E%3C/svg%3E") center / contain no-repeat;
+}
 #topbar .spacer { flex: 1; }
+#topbar .nav-label { opacity: 0; transition: opacity .12s ease; display: flex; align-items: center; gap: 8px; min-width: 0; }
+#topbar:hover .nav-label, #topbar:focus-within .nav-label { opacity: 1; transition-delay: .05s; }
+.nav-item {
+  display: flex; align-items: center; gap: 16px; width: 220px; flex: none;
+  padding: 11px 14px; border-radius: 10px; text-align: left; white-space: nowrap; color: var(--dim);
+}
+.nav-item:hover { background: rgba(255, 255, 255, .06); color: var(--text); }
+.nav-item.selected { background: var(--accent); color: #fff; font-weight: 600; }
+.nav-icon { position: relative; display: grid; place-items: center; width: 24px; flex: none; }
+.nav-icon .icon { display: grid; }
+.nav-dot { position: absolute; top: -3px; right: -4px; width: 9px; height: 9px; border-radius: 50%; background: var(--live); }
+#topbar:hover .nav-dot, #topbar:focus-within .nav-dot { display: none; }
+.nav-badge { background: var(--live); color: #fff; font-size: 11px; border-radius: 999px; padding: 1px 7px; }
+.nav-item .nav-label { flex-direction: row; }
+.nav-item.nowplaying .nav-label { flex-direction: column; align-items: flex-start; gap: 0; }
+.nav-item.nowplaying small { font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--accent); }
+.nav-item.nowplaying { color: var(--text); background: rgba(61, 123, 255, .14); }
+#topbar .chip { width: 220px; max-width: none; flex: none; background: transparent; padding: 8px 10px; }
+#topbar .chip .ellipsis { opacity: 0; transition: opacity .12s; }
+#topbar:hover .chip .ellipsis, #topbar:focus-within .chip .ellipsis { opacity: 1; }
+#topbar .clock { margin: 6px 0 0 12px; font-size: 18px; }
 .chip {
   display: inline-flex; align-items: center; gap: 8px;
   background: var(--panel); border-radius: 999px; padding: 6px 14px;
@@ -78,7 +105,7 @@ input { font: inherit; }
 .nowplaying { max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- huvudyta */
-#main { flex: 1; min-height: 0; padding: 0 24px 20px; display: flex; gap: 14px; }
+#main { flex: 1; min-height: 0; padding: 20px 24px 20px 92px; display: flex; gap: 14px; }
 .panel { background: var(--panel); border-radius: 12px; padding: 8px; min-height: 0; }
 .col { display: flex; flex-direction: column; min-height: 0; }
 .scroll { overflow-y: auto; min-height: 0; flex: 1; scrollbar-width: thin; scrollbar-color: #2a3140 transparent; }
@@ -350,3 +377,4 @@ input { font: inherit; }
 .rem-when { width: 140px; flex: none; display: flex; flex-direction: column; }
 .chcard .bar { margin: 5px 0 3px; }
 .g-head .logo img { object-fit: contain; }
+#topbar .brand .nav-label { gap: 0; }

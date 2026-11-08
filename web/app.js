@@ -76,6 +76,13 @@ function fill(el, ...kids) {
 const sized = (el, w, hgt) => { el.style.width = `${w}px`; el.style.height = `${hgt}px`; return el; };
 
 const ICONS = {
+  tv: '<path d="M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3c-1.1 0-2 .89-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.11-.9-2-2-2zm0 14H3V8h18v12zM9 10v8l7-4z"/>',
+  vod: '<path d="M18 4l2 4h-3l-2-4h-2l2 4h-3l-2-4H8l2 4H7L5 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4h-4z"/>',
+  series: '<path d="M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z"/>',
+  favorites: '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z"/>',
+  history: '<path d="M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>',
+  play: '<path d="M8 5v14l11-7z"/>',
+  stop: '<path d="M6 6h12v12H6z"/>',
   guide: '<path d="M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z"/>',
   bell: '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2zm-2 1H8v-6c0-2.48 1.51-4.5 4-4.5s4 2.02 4 4.5v6z"/>',
   bellOn: '<path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.89 2 2 2zm6-6v-5c0-3.07-1.64-5.64-4.5-6.32V4a1.5 1.5 0 0 0-3 0v.68C7.63 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/>',
@@ -394,19 +401,24 @@ function newBadge(type, id) {
   return h('span', { class: 'badge-new', 'data-new': favKey(type, id), hidden: !n }, n === 1 ? tr('NYTT', 'NEW') : tr(`${n} NYA`, `${n} NEW`));
 }
 
+/** Menyn till vänster: ikoner, och text när musen är över (eller fokus är i) menyn. */
 function renderTop() {
   const top = $('#topbar');
   if (!top || app.view !== 'browse') return;
   const media = app.room?.media;
+  const item = (iconName, text, { selected = false, onclick, badge = null, sub = null, cls = '' } = {}) =>
+    h('button', { class: `btn nav-item ${selected ? 'selected' : ''} ${cls}`, onclick, 'aria-label': text },
+      h('span', { class: 'nav-icon' }, icon(iconName, 22), badge && h('span', { class: 'nav-dot' })),
+      h('span', { class: 'nav-label' }, sub && h('small', {}, sub), h('span', { class: 'ellipsis' }, text), badge && h('b', { class: 'nav-badge' }, badge)));
+  const newFav = app.favorites.reduce((n, f) => n + (f.newCount || 0), 0);
   fill(top,
-    h('div', { class: 'brand' }, h('span', { class: 'brand-b' }, 'Couch'), h('span', { class: 'brand-a' }, 'mates')),
-    ...TABS().map(([id, text]) => h('button', { class: `btn ${app.tab === id ? 'selected' : ''}`, onclick: () => setTab(id) }, text)),
-    // Sök och inställningar som ikoner – tar mindre plats
-    h('button', { class: `btn icon-btn-top ${app.tab === 'search' ? 'selected' : ''}`, title: tr('Sök', 'Search'), 'aria-label': tr('Sök', 'Search'), onclick: () => setTab('search') }, icon('search')),
-    h('button', { class: 'btn icon-btn-top', title: tr('Inställningar', 'Settings'), 'aria-label': tr('Inställningar', 'Settings'), onclick: () => showLogin() }, icon('settings')),
+    h('div', { class: 'brand' }, h('span', { class: 'brand-logo' }), h('span', { class: 'nav-label' }, h('span', { class: 'brand-b' }, 'Couch'), h('span', { class: 'brand-a' }, 'mates'))),
+    ...TABS().map(([id, text]) => item(id === 'live' ? 'tv' : id, text.replace(/\s*●\d+$/, ''), { selected: app.tab === id, onclick: () => setTab(id), badge: id === 'favorites' && newFav ? `●${newFav}` : null })),
+    item('search', tr('Sök', 'Search'), { selected: app.tab === 'search', onclick: () => setTab('search') }),
+    item('settings', tr('Inställningar', 'Settings'), { onclick: () => showLogin() }),
     h('div', { class: 'spacer' }),
-    media && h('button', { class: 'btn selected nowplaying', onclick: openPlayer, title: media.title }, `▶  ${media.title}`),
-    media && h('button', { class: 'btn', onclick: () => cmd.stop() }, tr('■ Stoppa', '■ Stop')),
+    media && item('play', media.title, { onclick: openPlayer, sub: tr('Nu spelas', 'Now playing'), cls: 'nowplaying' }),
+    media && item('stop', tr('Stoppa för alla', 'Stop for everyone'), { onclick: () => cmd.stop() }),
     viewersChip(app.members, { clickable: true }),
     h('div', { class: 'clock' }, hhmm(nowSec())),
   );
