@@ -427,14 +427,14 @@ const server = http.createServer(async (req, res) => {
     // Kvaliteter för en ström (för spelare som inte kan välja själva, t.ex. VLC).
     if ((m = p.match(/^\/api\/sources\/([a-z0-9_-]{1,64})\/qualities$/))) {
       try {
-        const { variants } = await sourcePlaylist(m[1], str(url.searchParams.get('id')).slice(0, 128));
+        const { variants } = await sourcePlaylist(m[1], str(url.searchParams.get('id')).slice(0, 128), sourceOptions(m[1], url));
         return json(res, 200, variants.map(({ id, name, height }) => ({ id, name, height })));
       } catch (e) {
         return json(res, 502, { error: e.message });
       }
     }
     if ((m = p.match(/^\/stream\/plugin\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_.:%-]{1,200})\.m3u8$/))) {
-      return pluginStream(res, m[1], decodeURIComponent(m[2]), str(url.searchParams.get('quality')).slice(0, 40));
+      return pluginStream(res, m[1], decodeURIComponent(m[2]), str(url.searchParams.get('quality')).slice(0, 40), sourceOptions(m[1], url));
     }
     // Sammanslagen tablå för Dispatcharr: originalet först, reservkällan fyller luckorna.
     if (p === '/epg/merged.xml' || p === '/epg/merged.xml.gz') {
@@ -653,6 +653,8 @@ function sanitizeMedia(m) {
     };
     media.url = `/stream/plugin/${mm[1]}/${encodeURIComponent(mm[2])}.m3u8` + (cfg.pin ? `?pin=${encodeURIComponent(cfg.pin)}` : '');
     media.chat = media.live && plugins.hasChat(mm[1]);
+    // Pluginet bestämmer spelarens tangenter och inställningar (apparna ritar upp det).
+    media.player = plugins.playerSpec(mm[1]);
     return media;
   }
   if (!m || !['live', 'movie', 'episode'].includes(m.type)) return null;
@@ -691,6 +693,16 @@ function handle(c, msg) {
     case 'ping':
       send(c.ws, { type: 'pong', t: msg.t, s: now() });
       break;
+
+    case 'source_action': {
+      // En knapp i spelarens inställningar (type 'actions') – pluginet bestämmer vad som händer.
+      const m = state.media;
+      const action = clean(msg.action, 32);
+      if (m?.type !== 'plugin' || !m.player?.settings.some((s) => s.type === 'actions' && s.options.some((o) => o.id === action))) break;
+      plugins.callSource(m.source, 'action', [m.id.slice(m.source.length + 1), action, { by: c.name }], 15000)
+        .catch((e) => console.warn(`[källa] ${m.source}: knappen ${action} – ${e.message}`));
+      break;
+    }
 
     case 'chat_sub':
       // Klienten vill visa chatten (t.ex. Twitch) – skicka det senaste direkt.
@@ -1143,11 +1155,25 @@ async function searchSources(q) {
 const resolved = new Map(); // "källa:objekt" → { url, t }
 const RESOLVE_TTL = 8 * 60 * 1000;
 
-async function resolveSource(source, item, fresh = false) {
-  const key = `${source}:${item}`;
+/**
+ * Val som spelaren skickar med (?opt.<id>=<värde>) – bara de som pluginet själv har angett
+ * som 'choice' i sina inställningar, och bara giltiga värden.
+ */
+function sourceOptions(source, url) {
+  const options = {};
+  for (const s of plugins.playerSpec(source)?.settings || []) {
+    if (s.type !== 'choice') continue;
+    const v = str(url.searchParams.get(`opt.${s.id}`));
+    options[s.id] = s.options.some((o) => o.id === v) ? v : s.default;
+  }
+  return options;
+}
+
+async function resolveSource(source, item, fresh = false, options = {}) {
+  const key = `${source}:${item}:${JSON.stringify(options)}`;
   const hit = resolved.get(key);
   if (!fresh && hit && Date.now() - hit.t < RESOLVE_TTL) return hit.url;
-  const r = await plugins.callSource(source, 'resolve', [item], 20000);
+  const r = await plugins.callSource(source, 'resolve', [item, { options }], 20000);
   const u = str(r?.url);
   if (!/^https?:\/\//.test(u)) throw new Error('Källan gav ingen ström (sänder kanalen just nu?)');
   resolved.set(key, { url: u, t: Date.now() });
@@ -1164,13 +1190,13 @@ function hlsAttr(line, key) {
  * Hämtar källans HLS-spellista med fullständiga adresser och listar dess kvaliteter
  * (varianter): id t.ex. "720p60", namn från spellistan (t.ex. "1080p60 (source)").
  */
-async function sourcePlaylist(source, item) {
+async function sourcePlaylist(source, item, options = {}) {
   if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(item)) throw new Error('Ogiltigt id');
-  let upstream = await resolveSource(source, item);
+  let upstream = await resolveSource(source, item, false, options);
   let r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
   if (!r.ok) {
     // Adressen har troligen gått ut – hämta en ny.
-    upstream = await resolveSource(source, item, true);
+    upstream = await resolveSource(source, item, true, options);
     r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
   }
   if (!r.ok) throw new Error(`strömmen svarade ${r.status}`);
@@ -1200,9 +1226,9 @@ async function sourcePlaylist(source, item) {
 }
 
 /** Skickar källans HLS-spellista vidare. Med quality: bara den varianten (för VLC som inte kan välja själv). */
-async function pluginStream(res, source, item, quality = '') {
+async function pluginStream(res, source, item, quality = '', options = {}) {
   try {
-    const { lines, variants, all } = await sourcePlaylist(source, item);
+    const { lines, variants, all } = await sourcePlaylist(source, item, options);
     const pick = quality && variants.find((v) => v.id === quality);
     let out = lines;
     if (pick) {

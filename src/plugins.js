@@ -23,9 +23,25 @@
 //     browse: async () => ({ sections: [{ id, title, items: [item, …] }] }),
 //     search: async (q) => [item, …],
 //     resolve: async (itemId) => ({ url: 'https://…/playlist.m3u8' }),   // HLS-ström att spela
+//     resolve: async (itemId, { options }) => …              // options = val från spelarens egna inställningar (se nedan)
 //     chat: (itemId, onMessage) => stop,   // valfritt: livechatt, onMessage({ user, color, text }); returnerar stoppfunktion
+//     action: async (itemId, actionId, { by }) => {},        // valfritt: knappar i spelarens inställningar
+//     player: { keys, settings },                            // valfritt: hur spelaren ser ut och styrs (se nedan)
 //   });
 //   item = { id, title, subtitle, image, live: true/false, viewers }
+//
+// Spelaren (gäller alla appar – inget behöver ändras i servern eller apparna):
+//   keys: vad fjärrkontrollens knappar gör: { ok, up, down, left, right }
+//         'pause' (paus/spela) | 'settings' (öppna inställningar) | 'chat' (visa/dölj chatten) | 'info' (visa info) | 'none'
+//   settings: rutorna i inställningspanelen, i den ordningen:
+//     { type: 'quality' }                       strömmens kvaliteter (läses från HLS-spellistan)
+//     { type: 'chat' }                          visa/dölj chatten (kräver chat())
+//     { type: 'audio' } / { type: 'subtitles' } ljudspår / undertexter i strömmen
+//     { type: 'choice', id, title, options: [{ id, label }], default }
+//                                               eget val, sparas per enhet och skickas till resolve() som options[id]
+//     { type: 'actions', id, title, options: [{ id, label }] }
+//                                               knappar – anropar action(itemId, knappens id)
+//   Utan player används: OK paus, ▼/▶ inställningar, ◀ chatt, och rutorna chatt + kvalitet + ljud.
 // OBS: plugins kör med samma rättigheter som servern – installera bara sådana du litar på.
 
 import fs from 'node:fs';
@@ -34,6 +50,8 @@ import { pathToFileURL } from 'node:url';
 import { unzip } from './unzip.js';
 
 const SAFE_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
+const KEY_ACTIONS = ['pause', 'settings', 'chat', 'info', 'none'];
+const SECTION_TYPES = ['quality', 'chat', 'audio', 'subtitles', 'choice', 'actions'];
 
 export class PluginHost {
   constructor({ dir, stateFile, room, log = console.log }) {
@@ -255,6 +273,47 @@ export class PluginHost {
     return [...this.plugins.values()]
       .filter((p) => p.enabled && p.source)
       .map((p) => ({ id: p.id, name: p.source.name || p.meta?.name || p.id, iconPath: p.source.iconPath || null, chat: typeof p.source.chat === 'function' }));
+  }
+
+  /**
+   * Spelarens utseende för en källa: tangenter och rutorna i inställningspanelen.
+   * Det pluginet anger kontrolleras här, så att apparna alltid får något giltigt.
+   */
+  playerSpec(id) {
+    const p = this.plugins.get(id);
+    const src = p?.enabled ? p.source : null;
+    if (!src) return null;
+    const hasChat = typeof src.chat === 'function';
+    const hasAction = typeof src.action === 'function';
+    const raw = src.player && typeof src.player === 'object' ? src.player : {};
+    const safeId = (v) => (/^[A-Za-z0-9_-]{1,32}$/.test(String(v ?? '')) ? String(v) : null);
+    const text = (v, max) => String(v ?? '').replace(/[\u0000-\u001f]/g, '').trim().slice(0, max);
+
+    const keys = { ok: 'pause', up: 'info', down: 'settings', left: hasChat ? 'chat' : 'none', right: 'settings' };
+    for (const k of Object.keys(keys)) {
+      const v = raw.keys?.[k];
+      if (KEY_ACTIONS.includes(v)) keys[k] = v === 'chat' && !hasChat ? 'none' : v;
+    }
+
+    const list = Array.isArray(raw.settings) ? raw.settings : [...(hasChat ? [{ type: 'chat' }] : []), { type: 'quality' }, { type: 'audio' }];
+    const settings = [];
+    for (const s of list.slice(0, 12)) {
+      if (!s || !SECTION_TYPES.includes(s.type)) continue;
+      if (s.type === 'chat' && !hasChat) continue;
+      if (s.type === 'actions' && !hasAction) continue;
+      const out = { id: safeId(s.id) || s.type, type: s.type, title: text(s.title, 40) || null };
+      if (s.type === 'choice' || s.type === 'actions') {
+        out.options = (Array.isArray(s.options) ? s.options : [])
+          .map((o) => ({ id: safeId(o?.id), label: text(o?.label, 60) }))
+          .filter((o) => o.id && o.label)
+          .slice(0, 20);
+        if (!out.options.length) continue;
+        if (s.type === 'choice') out.default = out.options.some((o) => o.id === s.default) ? s.default : out.options[0].id;
+      }
+      if (settings.some((x) => x.id === out.id)) continue;
+      settings.push(out);
+    }
+    return { keys, settings };
   }
 
   /** Har källan livechatt? */

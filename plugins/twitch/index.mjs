@@ -77,6 +77,19 @@ export default function setup(api) {
     name: 'Twitch',
     iconPath: LOGO,
 
+    // Spelaren: pluginet bestämmer knapparna och vad som finns i inställningarna.
+    player: {
+      keys: { ok: 'pause', down: 'settings', right: 'chat', left: 'none', up: 'info' },
+      settings: [
+        { type: 'chat', title: 'Chatt' },
+        { type: 'quality', title: 'Kvalitet' },
+        {
+          type: 'choice', id: 'latency', title: 'Fördröjning', default: 'low',
+          options: [{ id: 'low', label: 'Låg (närmare live)' }, { id: 'normal', label: 'Normal (stabilare)' }],
+        },
+      ],
+    },
+
     async browse() {
       const s = api.settings;
       const own = String(s.channels || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z0-9_]{1,40}$/.test(x));
@@ -105,7 +118,7 @@ export default function setup(api) {
         .filter(Boolean);
     },
 
-    async resolve(login) {
+    async resolve(login, { options = {} } = {}) {
       if (!/^[A-Za-z0-9_]{1,40}$/.test(login)) throw new Error('Ogiltigt kanalnamn');
       const d = await gql(`query($login: String!) {
         streamPlaybackAccessToken(channelName: $login, params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { value signature }
@@ -114,7 +127,7 @@ export default function setup(api) {
       if (!tok) throw new Error('Kanalen sänder inte just nu');
       const qs = new URLSearchParams({
         sig: tok.signature, token: tok.value, allow_source: 'true', allow_audio_only: 'true',
-        fast_bread: 'true', p: String(Math.floor(Math.random() * 1e7)),
+        fast_bread: options.latency === 'normal' ? 'false' : 'true', p: String(Math.floor(Math.random() * 1e7)),
       });
       return { url: `${USHER}/${login.toLowerCase()}.m3u8?${qs}` };
     },
