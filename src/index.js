@@ -14,6 +14,7 @@ import { SharedVod } from './sharedvod.js';
 import { History } from './history.js';
 import { Favorites } from './favorites.js';
 import { Reminders } from './reminders.js';
+import { buildMergedEpg } from './epgmerge.js';
 import { fileURLToPath } from 'node:url';
 
 // Webbklienten (hemsidan) ligger i ../web och serveras av samma server.
@@ -414,6 +415,15 @@ const server = http.createServer(async (req, res) => {
 
     if (p === '/api/favorites') return json(res, 200, favorites.list());
     if (p === '/api/reminders') return json(res, 200, reminders.list());
+    // Sammanslagen tablå för Dispatcharr: originalet först, reservkällan fyller luckorna.
+    if (p === '/epg/merged.xml' || p === '/epg/merged.xml.gz') {
+      if (!EPG_MERGE.primaryUrl) return json(res, 404, { error: 'EPG_PRIMARY_URL är inte satt' });
+      const merged = await mergedEpg();
+      if (!merged) return json(res, 503, { error: 'Tablån byggs – försök igen om en stund' });
+      res.writeHead(200, { 'content-type': 'application/xml; charset=utf-8', 'content-encoding': 'gzip', 'cache-control': 'no-store', 'content-length': merged.gz.length });
+      return res.end(merged.gz);
+    }
+    if (p === '/api/epg/merge-status') return json(res, 200, epgMergeState.stats || { status: epgMergeState.error || 'inte byggd än' });
     if (p === '/api/live/guide') {
       const id = str(url.searchParams.get('id'));
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) return json(res, 400, { error: 'Ogiltig kanal' });
@@ -951,6 +961,56 @@ async function checkEnded() {
   }
 }
 setInterval(checkEnded, 1000).unref();
+
+// ---------------------------------------------------------------- Sammanslagen tablå (EPG)
+
+const EPG_MERGE = {
+  primaryUrl: env.EPG_PRIMARY_URL || '',
+  fallbackUrl: env.EPG_FALLBACK_URL || 'https://epgshare01.online/epgshare01/epg_ripper_SE1.xml.gz',
+  refreshMs: Number(env.EPG_MERGE_HOURS || 3) * 3600 * 1000,
+  // Egna kopplingar om namnmatchningen inte räcker: "originalid=reservid,originalid2=reservid2"
+  extraMap: Object.fromEntries(str(env.EPG_FALLBACK_MAP).split(',').map((x) => x.split('=').map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1])),
+};
+const EPG_FILE = path.join(cfg.dataDir, 'merged-epg.xml.gz');
+const epgMergeState = { gz: null, stats: null, builtAt: 0, building: null, error: null };
+try {
+  const st = fs.statSync(EPG_FILE);
+  epgMergeState.gz = fs.readFileSync(EPG_FILE);
+  epgMergeState.builtAt = st.mtimeMs;
+} catch { /* ingen sparad tablå än */ }
+
+async function rebuildEpg() {
+  if (epgMergeState.building) return epgMergeState.building;
+  epgMergeState.building = (async () => {
+    try {
+      const { xml, stats } = await buildMergedEpg({ ...EPG_MERGE });
+      const zlib = await import('node:zlib');
+      const gz = zlib.gzipSync(xml);
+      fs.mkdirSync(cfg.dataDir, { recursive: true });
+      fs.writeFileSync(EPG_FILE, gz);
+      Object.assign(epgMergeState, { gz, stats, builtAt: Date.now(), error: null });
+    } catch (e) {
+      epgMergeState.error = e.message;
+      console.warn('[epg] kunde inte bygga sammanslagen tablå:', e.message);
+    } finally {
+      epgMergeState.building = null;
+    }
+  })();
+  return epgMergeState.building;
+}
+
+/** Senaste sammanslagna tablån (byggs om i bakgrunden när den är gammal). */
+async function mergedEpg() {
+  const stale = Date.now() - epgMergeState.builtAt > EPG_MERGE.refreshMs;
+  if (!epgMergeState.gz) await rebuildEpg();
+  else if (stale) rebuildEpg();
+  return epgMergeState.gz ? { gz: epgMergeState.gz } : null;
+}
+
+if (EPG_MERGE.primaryUrl) {
+  setTimeout(() => { if (!epgMergeState.gz || Date.now() - epgMergeState.builtAt > EPG_MERGE.refreshMs) rebuildEpg(); }, 5000).unref();
+  setInterval(rebuildEpg, EPG_MERGE.refreshMs).unref();
+}
 
 // ---------------------------------------------------------------- Påminnelser
 
