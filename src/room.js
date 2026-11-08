@@ -159,6 +159,8 @@ export class Room {
       image: item.image,
       live,
       url: `/stream/${plugin}/${encodeURIComponent(id)}`,
+      // 'hls' or 'file' – so players know what they get (the address has no file extension).
+      type: r.type,
       chat: live && this.plugins.has(plugin, 'chat'),
       // The plugin decides the player's keys and settings; the apps draw them.
       player: this.plugins.playerSpec(plugin, r.player),
