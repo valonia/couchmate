@@ -13,7 +13,6 @@ import { proxy } from './streams.js';
 const KEY_ACTIONS = ['pause', 'settings', 'chat', 'info', 'channels', 'channel_up', 'channel_down', 'seek_back', 'seek_forward', 'none'];
 const KEYS = ['ok', 'up', 'down', 'left', 'right'];
 const SECTION_TYPES = ['quality', 'chat', 'audio', 'subtitles', 'choice', 'actions'];
-const SCREEN_TYPES = ['rows', 'groups', 'detail', 'message'];
 const ROUTE_AUTH = ['pin', 'admin', 'public'];
 
 /** Text a plugin sends to the apps: a plain string (never translated) or api.t('…') (translated). */
@@ -379,6 +378,8 @@ export class PluginHost {
       description: text(it.description, 2000),
       kind: /^[a-z_]{1,24}$/.test(str(it.kind)) ? it.kind : null,
       action: it.action === 'open' ? 'open' : 'play',
+      // The view that opens for action 'open' (with params { id }).
+      view: /^[A-Za-z0-9_-]{1,32}$/.test(str(it.view)) ? str(it.view) : null,
       live: Boolean(it.live),
       favorite: it.favorite !== false,
     };
@@ -394,36 +395,23 @@ export class PluginHost {
     return (Array.isArray(list) ? list : []).map((it) => this.item(id, it)).filter(Boolean).slice(0, max);
   }
 
-  /** A screen: rows | groups | detail | message. */
-  screen(id, d) {
-    if (!d || typeof d !== 'object') return { type: 'message', text: null };
-    const type = SCREEN_TYPES.includes(d.type) ? d.type : 'rows';
-    const out = { type, message: text(d.message, 500) };
-    if (type === 'rows') {
-      out.rows = (Array.isArray(d.rows) ? d.rows : Array.isArray(d.sections) ? d.sections : []).slice(0, 30).map((r, i) => ({
-        id: clean(r.id, 64) || String(i),
-        title: text(r.title, 120),
-        style: ['landscape', 'poster', 'square'].includes(r.style) ? r.style : 'landscape',
-        items: this.items(id, r.items, 200),
-      }));
-    } else if (type === 'groups') {
-      out.style = ['channels', 'posters', 'landscape'].includes(d.style) ? d.style : 'posters';
-      out.guide = Boolean(d.guide); // channels with a programme guide (data 'epg' and 'guide')
-      out.groups = (Array.isArray(d.groups) ? d.groups : []).slice(0, 2000).map((g) => ({
-        id: clean(g.id, 64), title: text(g.title, 200), count: Number(g.count) >= 0 ? Number(g.count) : null,
-      })).filter((g) => g.id);
-      out.initial = clean(d.initial, 64) || null;
-    } else if (type === 'detail') {
-      out.item = this.item(id, d.item);
-      out.facts = (Array.isArray(d.facts) ? d.facts : []).map((f) => text(f, 100)).filter(Boolean).slice(0, 8);
-      out.seasons = (Array.isArray(d.seasons) ? d.seasons : []).slice(0, 100).map((s, i) => ({
-        id: clean(s.id, 64) || String(i), title: text(s.title, 80), items: this.items(id, s.items, 500),
-      }));
-      out.resume = d.resume && ITEM_ID.test(str(d.resume)) ? str(d.resume) : null;
-    } else {
-      out.text = text(d.text, 1000);
-    }
-    return out;
+  /**
+   * A view the plugin built from building blocks (see plugins/PLUGINS.md). It is passed on to the apps as it is –
+   * they draw it – but it must be an object, not too deep and not too large.
+   */
+  view(id, d) {
+    const message = (t) => ({ type: 'column', padding: 20, children: [{ type: 'text', text: t, style: 'dim' }] });
+    if (!d || typeof d !== 'object' || Array.isArray(d)) return message(null);
+    let depth = 0;
+    const walk = (v, level) => {
+      depth = Math.max(depth, level);
+      if (depth > 40) throw new Error('The view is nested too deeply');
+      if (Array.isArray(v)) v.forEach((x) => walk(x, level + 1));
+      else if (v && typeof v === 'object') Object.values(v).forEach((x) => walk(x, level + 1));
+    };
+    walk(d, 0);
+    if (JSON.stringify(d).length > 4_000_000) throw new Error('The view is too large');
+    return d;
   }
 
   /** Search results: a list of items (one section) or { sections: [{ title, items, style }] }. */
@@ -490,7 +478,9 @@ export class PluginHost {
       if (settings.some((x) => x.id === out.id)) continue;
       settings.push(out);
     }
-    return { keys, settings, channels, guide };
+    // overlay: a view drawn on top of the video (building blocks bound to media/player/room), or null for the app's own.
+    const overlay = raw.overlay && typeof raw.overlay === 'object' && !Array.isArray(raw.overlay) ? this.view(id, raw.overlay) : null;
+    return { keys, settings, channels, guide, overlay };
   }
 
   /** Choices the player sent (?opt.<id>=<value>): only 'choice' settings the plugin declared, only valid values. */

@@ -59,9 +59,8 @@ export default function setup(api) {
     menu: [{ id: 'home', title: api.t('YouTube') }],  // optional – default: one entry named after the source
                                                      // (or an async function – see "The menu")
 
-    async screen(menuId, ctx) { /* → a screen */ },
-    async data(name, params, ctx) { /* → lazy data for a screen */ },
-    async open(itemId, ctx) { /* → a detail screen for an item with action 'open' */ },
+    async view(viewId, params, ctx) { /* → a view built from building blocks (menu entries and opened views) */ },
+    async data(name, params, ctx) { /* → data a view loads when it needs it */ },
     async search(query, ctx) { /* → items, or { sections } */ },
     async resolve(itemId, { options }) { /* → where the stream is */ },
     async next(itemId) { /* → the item that plays after this one, or null */ },
@@ -100,7 +99,8 @@ Everything the apps show is an item:
   backdrop: 'https://…',
   description: '…',
   kind: 'movie',              // free text: channel, movie, series, episode, stream, video …
-  action: 'play',             // 'play' (default) or 'open' (calls open(id) for a detail screen)
+  action: 'play',             // 'play' (default) or 'open'
+  view: 'show',               // for action 'open': the view that opens, with params { id }
   live: false,
   number: 12,                 // channel number
   viewers: 3400,
@@ -109,30 +109,117 @@ Everything the apps show is an item:
 }
 ```
 
-### Screens
+### Views
 
-`screen(menuId)` and `open(itemId)` return one of these:
+**What the apps show behind your menu entries is drawn from your own description.** `view(viewId, params)`
+returns a view: a tree of building blocks. The apps only know how to draw the blocks; the layout – columns,
+lists, cards, what shows where – is yours. A menu entry `{ id: 'live' }` asks for `view('live', {})`; the
+action `{ open: 'show', params: { id: '…' } }` asks for `view('show', { id: '…' })` and pushes it (Back goes back).
 
 ```js
-// Rows of cards
-{ type: 'rows', rows: [{ id: 'top', title: api.t('Popular'), style: 'landscape', items: [...] }] }
-
-// A list of groups on the left, the selected group's items on the right.
-// Items are fetched with data('group', { menu, group }).
-{ type: 'groups', style: 'channels' | 'posters' | 'landscape', guide: true, groups: [{ id, title }], initial: 'id' }
-
-// A detail page, e.g. a series with seasons
-{ type: 'detail', item: {...}, facts: ['2019', 'Drama'], seasons: [{ id, title: api.t('Season {n}', { n: 1 }), items: [...] }] }
-
-// Just a message (e.g. "not set up yet")
-{ type: 'message', text: api.t('Nothing here.') }
+async view(id, params) {
+  return {
+    type: 'row', gap: 14,
+    state: { group: 'news', channel: null },         // the view's own values, changed by "set"
+    view: { title: 'Hello' },                        // fixed values, read as {{view.title}}
+    refresh: 0,                                      // seconds: fetch the view again (state is kept)
+    children: [ /* blocks */ ],
+  };
+}
 ```
 
-Any screen can also have `message`, shown above the content.
+#### Bindings
 
-### Data
+Any string can contain `{{…}}`:
 
-`data(name, params)` returns data that screens load when needed. These names have a fixed shape:
+| | |
+|---|---|
+| `{{item.title}}` | the current item (inside a list's `item` template, or a block's loaded `data`) |
+| `{{state.channel.id}}` | the view's state |
+| `{{view.title}}` | the view's fixed values (and its `params`) |
+| `{{media.title}}`, `{{player.position}}` | in a player overlay (see below) |
+| `{{a.b \|\| c.d}}` | the first one that is set |
+| `{{item.items.length}}` | the length of a list |
+
+A string that is only one binding keeps the value's type, so `'{{item}}'` passes the whole object along.
+The app also works out these for any item: `$favorite`, `$newCount`, `$newLabel` (new episodes), `$playing`,
+`$live` (between `start` and `end` right now), `$now`/`$next` (from the item's `programs` list) and
+`$reminder` (for programmes in a list with `channel`).
+
+#### Blocks
+
+Every block can have `width`/`height` (dp, `'fill'` or `'65%'`), `weight` (share of the row/column),
+`padding` (n, `[h, v]` or `[left, top, right, bottom]`), `background`, `radius`, `aspect`, `opacity`,
+`align` (inside a `box`: `topStart`, `topEnd`, `center`, `bottomStart` …), `when` and `unless`
+(a binding, or a list of them: `when` needs all to be set, `unless` hides if any is).
+
+| type | |
+|---|---|
+| `row`, `column` | children side by side / on top of each other. `gap`, `align` (cross axis) |
+| `box` | children on top of each other (use `align` on the children) |
+| `spacer` | empty space (`width`, `height` or `weight`) |
+| `text` | `text` (or `join: [...]` – parts with an empty binding are left out – and `separator`), `style`, `color`, `size`, `bold`, `maxLines`, `fallback` |
+| `time` | `value` (seconds), `format`: `time` (21:30), `day` (Today, Tomorrow, Tuesday 10 November) or `datetime` – in the device's language |
+| `image` | `src`, `fit` (`cover`/`contain`), `fallback` (text shown if there is no image) |
+| `icon` | `path` (SVG path, 24×24) or `name` (`bell`, `star`, `search`, `play`, `history`, `live`, `movie`, `series`), `size`, `color` |
+| `badge` | a small label: `text`, `color`, `textColor` |
+| `progress` | a bar: `value` (0–1) or `start`/`end` (seconds – it moves by itself), `color`, `track` |
+| `button` | `text`, `selected`, `onClick` |
+| `list` | items in a list – see below |
+| `grid` | items in a grid – like `list`, plus `minWidth` (the smallest column) and `rowGap` |
+| `clock` | the time of day |
+| `topbar` | (player overlays) the app's top strip: who did what, who is watching, the clock |
+
+Styles: `title`, `headline`, `body`, `bodyStrong`, `caption`, `dim`, `faint`, `soft` (dimmed, follows a
+focused row's colour), `label` (small capitals). Colours: `text`, `textSoft`, `dim`, `faint`, `accent`,
+`gold`, `live`, `green`, `status`, `white`, `black`, `dark`, `track`, `trackSoft` or `#RRGGBB`.
+Backgrounds: those colours plus `panel`, `panelHi`, `bg`, `accentSoft`, `heroFade`, `bottomFade`, `topFade`, `sideFade`.
+Using these keeps every plugin looking like Couchmate.
+
+#### Lists
+
+```js
+{
+  type: 'list', id: 'channels',
+  items: '{{item.items}}',                 // a binding – or "data": { name, params } to load them
+  item: { type: 'row', children: [ … {{item.title}} … ] },   // the template for each item
+  focus: 'row',                            // row | card | poster | pill | none (not focusable itself)
+  direction: 'vertical',                   // or 'horizontal'
+  itemHeight: 64, itemWidth: 300, gap: 2, aspect: 0.667,     // aspect: the shape of poster/card items
+  label: '{{item.title}}', sublabel: '…',  // text under a poster
+  selected: '{{state.group}}',             // the item with this id is marked as selected
+  initial: '{{state.channel.id}}',         // focus lands here when entering the list
+  autofocus: true,                         // takes focus when the view opens
+  sectionBy: 'day',                        // day headings between items, by their "start"
+  channel: '{{state.channel}}',            // programmes in this list belong to this channel ($reminder)
+  enrich: { name: 'epg', as: 'programs', refresh: 180 },     // extra data per item: data(name, { ids }) → { id: value }
+  empty: api.t('Nothing here.'),
+  onFocus: { set: { channel: '{{item}}' } },
+  onClick: { play: '{{item}}' },
+  onLongClick: { favorite: '{{item}}' },
+}
+```
+
+#### Actions
+
+`onClick`, `onFocus` and `onLongClick` take an action, or a list of them:
+
+| | |
+|---|---|
+| `{ play: '{{item}}' }` | plays the item for everyone (it needs an `id`; `subtitle` and `position` are optional) |
+| `{ open: 'show', params: { id: '{{item.id}}' } }` | opens another view of yours on top (Back goes back) |
+| `{ set: { channel: '{{item}}' } }` | changes the view's state – everything bound to it updates |
+| `{ favorite: '{{item}}' }` | adds or removes a favourite |
+| `{ remind: { channel: '{{state.channel}}', program: '{{item}}' } }` | adds or removes a reminder for a programme |
+| `{ if: '{{item.$live}}', then: …, else: … }` | chooses an action |
+| `{ back: true }` | closes the view |
+
+#### Data
+
+A block with `data: { name, params, delay, refresh }` loads `data(name, params)` from your plugin when it is
+drawn (and again when the filled-in params change); inside it `{{item}}` is the answer. `delay` (ms) waits
+while the user is still moving, `refresh` (s) loads again. These names are also used by the app itself
+(favourite channels, the player's channel list), so give them this shape if you have them:
 
 | name | params | returns |
 |---|---|---|
@@ -141,8 +228,11 @@ Any screen can also have `message`, shown above the content.
 | `guide` | `id` | `[programme, …]` – the whole schedule for one channel |
 | `channels` | `id` | `[item, …]` – the channels to zap between while `id` plays |
 
-A programme is `{ title, description, start, end }` with times in seconds (Unix). Programmes get a
-"remind me" option in the apps; at the start time the server switches everyone to that channel.
+Any other name is passed on as it is. A programme is `{ title, description, start, end }` with times in
+seconds (Unix). At a reminder's start time the server switches everyone to that channel.
+
+The IPTV plugin's [views.mjs](iptv/views.mjs) builds Live TV (groups │ channels │ guide), Movies, Series and
+a series page this way, and the Twitch plugin builds its rows of stream cards.
 
 ### Playing: `resolve`
 
@@ -172,6 +262,7 @@ player: {
   // What the remote's buttons do while playing:
   // pause | settings | chat | info | channels | channel_up | channel_down | seek_back | seek_forward | none
   keys: { ok: 'pause', up: 'info', down: 'settings', left: 'seek_back', right: 'seek_forward' },
+  overlay: { … },   // a view drawn on top of the video – see below
   channels: true,   // you answer data('channels') – enables channel_up/down and the channel list
   guide: true,      // you answer data('epg') – the overlay shows what is on now and next
   // The boxes in the player's settings panel, in this order:
@@ -190,6 +281,16 @@ player: {
 
 Without `player`, OK pauses, ▼ and ▶ open the settings, ◀ opens the chat, and the panel shows chat,
 quality, audio and subtitles.
+
+#### The overlay
+
+`player.overlay` is a view (building blocks) drawn on top of the video while the overlay shows. It can bind to
+`{{media.title}}`, `{{media.subtitle}}`, `{{media.image}}`, `{{media.id}}`, `{{media.live}}` and to
+`{{player.position}}`, `{{player.duration}}`, `{{player.positionText}}`, `{{player.remainingText}}`,
+`{{player.progress}}` (0–1), `{{player.paused}}`, `{{player.seeking}}`, `{{player.status}}` (buffering …) and
+`{{player.hints}}` (what your keys do, in the device's language). Use `{ type: 'topbar' }` for the app's top
+strip and `data` blocks for anything else (the IPTV plugin loads `data('now', { id })` for what is on).
+Without an overlay the app shows its own.
 
 ### Chat
 

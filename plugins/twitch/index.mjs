@@ -46,7 +46,72 @@ export default function setup(api) {
     subtitle: [s.broadcaster.displayName, s.game?.displayName].filter(Boolean).join(' · '),
     image: fresh(s.previewImageURL),
     viewers: s.viewersCount,
+    viewersText: api.t('{n} viewers', { n: compact(s.viewersCount || 0) }),
   };
+
+  // A stream card: the preview with LIVE and viewers, the channel and the stream's title.
+  const streamCard = {
+    type: 'column', children: [
+      {
+        type: 'box', aspect: 1.7778, width: 'fill', children: [
+          { type: 'image', src: '{{item.image}}', fallback: '{{item.subtitle}}', fit: 'cover', width: 'fill', height: 'fill', radius: 12 },
+          {
+            type: 'row', align: 'topStart', padding: 8, gap: 6, children: [
+              { type: 'badge', text: 'LIVE', color: 'live' },
+              { type: 'badge', text: '{{item.viewersText}}', color: 'dark' },
+            ],
+          },
+          { type: 'badge', text: '★', color: 'dark', textColor: 'gold', align: 'topEnd', padding: 6, when: '{{item.$favorite}}' },
+        ],
+      },
+      {
+        type: 'column', padding: [12, 10, 12, 10], children: [
+          { type: 'text', text: '{{item.subtitle}}', style: 'bodyStrong', size: 15, maxLines: 1 },
+          { type: 'text', text: '{{item.title}}', size: 13, maxLines: 2, padding: [0, 2, 0, 0] },
+        ],
+      },
+    ],
+  };
+
+  // On top of the video: who did what, the channel and the stream, LIVE and the key hints.
+  const overlay = {
+    type: 'box', width: 'fill', height: 'fill', children: [
+      { type: 'topbar', align: 'topStart' },
+      {
+        type: 'column', align: 'bottomStart', width: 'fill', background: 'bottomFade', padding: [56, 80, 56, 40], children: [
+          {
+            type: 'row', align: 'center', children: [
+              { type: 'image', src: '{{media.image}}', fallback: '{{media.subtitle}}', fit: 'cover', width: 150, height: 84, radius: 10 },
+              { type: 'spacer', width: 24 },
+              {
+                type: 'column', weight: 1, children: [
+                  {
+                    type: 'row', align: 'center', children: [
+                      { type: 'text', text: '{{media.subtitle || media.title}}', style: 'title', size: 22, maxLines: 1 },
+                      { type: 'spacer', width: 12 },
+                      { type: 'badge', text: 'LIVE', color: 'live' },
+                    ],
+                  },
+                  { type: 'spacer', height: 6 },
+                  { type: 'text', text: '{{media.title}}', style: 'dim', size: 18, maxLines: 2, when: '{{media.subtitle}}' },
+                ],
+              },
+            ],
+          },
+          { type: 'spacer', height: 16 },
+          {
+            type: 'row', children: [
+              { type: 'text', text: '{{player.status}}', color: 'status', size: 14 },
+              { type: 'spacer', weight: 1 },
+              { type: 'text', text: '{{player.hints}}', style: 'faint', size: 13 },
+            ],
+          },
+        ],
+      },
+    ],
+  };
+
+  const compact = (n) => (n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)} M` : n >= 10_000 ? `${Math.floor(n / 1000)} k` : n >= 1000 ? `${(n / 1000).toFixed(1)} k` : String(n));
 
   /** Popular streams (Twitch gives at most 30 per request without extra verification). */
   async function popular(count, language) {
@@ -74,6 +139,7 @@ export default function setup(api) {
     // The player: this plugin decides the keys and what is in the settings panel.
     player: {
       keys: { ok: 'pause', down: 'settings', right: 'chat', left: 'none', up: 'info' },
+      overlay,
       settings: [
         { type: 'chat', title: api.t('Chat') },
         { type: 'quality', title: api.t('Quality') },
@@ -84,7 +150,8 @@ export default function setup(api) {
       ],
     },
 
-    async screen() {
+    /** The Twitch page: a row of stream cards per section. Built here from building blocks; the apps draw it. */
+    async view() {
       const s = api.settings;
       const own = String(s.channels || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => LOGIN.test(x));
       const lang = String(s.language || '').trim().toLowerCase();
@@ -97,7 +164,36 @@ export default function setup(api) {
       if (mine.length) rows.push({ id: 'mine', title: api.t('Your channels'), items: mine });
       if (local.length) rows.push({ id: 'lang', title: api.t('Popular in {language}', { language: lang.toUpperCase() }), items: local });
       rows.push({ id: 'top', title: api.t('Popular right now'), items: top });
-      return { type: 'rows', rows };
+      return {
+        type: 'column', refresh: 60, children: [
+          {
+            type: 'row', align: 'center', padding: [12, 0, 0, 10], children: [
+              { type: 'icon', path: LOGO, size: 28, color: 'accent' },
+              { type: 'spacer', width: 12 },
+              { type: 'text', text: 'Twitch', style: 'title', size: 26 },
+            ],
+          },
+          {
+            type: 'list', id: 'rows', weight: 1, items: rows, focus: 'none', gap: 18,
+            item: {
+              type: 'column', children: [
+                {
+                  type: 'row', padding: [12, 0, 0, 8], children: [
+                    { type: 'text', text: '{{item.title}}', style: 'headline', size: 20 },
+                    { type: 'text', text: '  {{item.items.length}}', style: 'faint', size: 20 },
+                  ],
+                },
+                {
+                  type: 'list', id: 'row-{{item.id}}', direction: 'horizontal', items: '{{item.items}}', focus: 'card',
+                  itemWidth: 300, gap: 16, padding: [12, 10, 12, 10],
+                  onClick: { play: '{{item}}' }, onLongClick: { favorite: '{{item}}' },
+                  item: streamCard,
+                },
+              ],
+            },
+          },
+        ],
+      };
     },
 
     async search(q) {

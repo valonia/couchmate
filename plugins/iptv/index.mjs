@@ -15,6 +15,7 @@ import path from 'node:path';
 import zlib from 'node:zlib';
 import { SharedVod } from './sharedvod.mjs';
 import { buildMergedEpg } from './epgmerge.mjs';
+import { liveView, postersView, seriesView, liveOverlay } from './views.mjs';
 
 const ICONS = {
   live: 'M21 6h-7.59l3.29-3.29L16 2l-4 4-4-4-.71.71L10.59 6H3c-1.1 0-2 .89-2 2v12c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V8c0-1.11-.9-2-2-2zm0 14H3V8h18v12zM9 10v8l7-4z',
@@ -44,6 +45,8 @@ const b64 = (v) => {
 };
 const fold = (s) => str(s).normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 // Tags like [4K], (2018), |SE| do not count when matching.
+/** Removes typical IPTV tags from titles: "Film [PRE] (2018)" → "Film". */
+const cleanTitle = (name) => str(name).replace(/\s*[\[(][^\])]*[\])]/g, '').replace(/\s{2,}/g, ' ').trim() || str(name);
 const searchable = (name) => fold(name).replace(/[\[(|][^\])|]*[\])|]/g, ' ').replace(/[^a-z0-9]+/g, ' ').trim();
 
 export default function setup(api) {
@@ -104,12 +107,12 @@ export default function setup(api) {
     }),
     movies: (x) => ({
       id: `movie:${str(x.stream_id)}:${EXT.test(str(x.container_extension)) ? x.container_extension : 'mp4'}`, kind: 'movie',
-      title: clean(x.name, 200), image: img(x.stream_icon), description: clean(x.plot, 1000) || null,
-      year: clean(x.year, 8) || null, genre: clean(x.genre, 100) || null, rating: rating(x.rating),
+      title: cleanTitle(clean(x.name, 200)), image: img(x.stream_icon), description: clean(x.plot, 1000) || null,
+      year: clean(x.year, 8) || (/[\[(]((?:19|20)\d{2})[\])]/.exec(str(x.name)) || [])[1] || null, genre: clean(x.genre, 100) || null, rating: rating(x.rating),
     }),
     series: (x) => ({
-      id: `series:${str(x.series_id)}`, kind: 'series', action: 'open',
-      title: clean(x.name, 200), image: img(x.cover), backdrop: img(asArray(x.backdrop_path)[0]),
+      id: `series:${str(x.series_id)}`, kind: 'series', action: 'open', view: 'show',
+      title: cleanTitle(clean(x.name, 200)), image: img(x.cover), backdrop: img(asArray(x.backdrop_path)[0]),
       description: clean(x.plot, 1000) || null, year: clean(x.releaseDate || x.release_date, 10).slice(0, 4) || null,
       genre: clean(x.genre, 100) || null, rating: rating(x.rating),
     }),
@@ -441,6 +444,7 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
     channels: true,
     guide: true,
     settings: [{ type: 'audio', title: api.t('Audio') }, { type: 'subtitles', title: api.t('Subtitles') }],
+    overlay: liveOverlay(api.t),
   };
   const VOD_PLAYER = {
     keys: { ok: 'pause', up: 'info', down: 'settings', left: 'seek_back', right: 'seek_forward' },
@@ -463,17 +467,26 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
     },
     player: VOD_PLAYER,
 
-    async screen(menu) {
-      if (!KINDS[menu]) return { type: 'message', text: api.t('Nothing here.') };
-      if (!configured) return { type: 'message', text: api.t('IPTV is not set up yet. Fill in the Dispatcharr settings in the admin panel.') };
-      const groups = await categories(menu);
-      return {
-        type: 'groups',
-        style: menu === 'live' ? 'channels' : 'posters',
-        guide: menu === 'live',
-        groups,
-        initial: groups[0]?.id || null,
-      };
+    /** The plugin's own views: live, movies, series (the menu entries) and show (one series). */
+    async view(id, params) {
+      const message = (text) => ({ type: 'column', padding: 20, children: [{ type: 'text', text, style: 'dim' }] });
+      if (!configured) return message(api.t('IPTV is not set up yet. Fill in the Dispatcharr settings in the admin panel.'));
+      if (id === 'live') return liveView(api.t, await categories('live'));
+      if (id === 'movies' || id === 'series') return postersView(api.t, id, await categories(id));
+      if (id === 'show') {
+        const m = /^series:([A-Za-z0-9_-]{1,64})$/.exec(str(params.id));
+        if (!m) return message(api.t('Nothing here.'));
+        const info = await seriesInfo(m[1]);
+        const item = { id: params.id, kind: 'series', action: 'open', view: 'show', title: info.title, image: info.image, backdrop: info.backdrop, description: info.description, year: info.year, genre: info.genre, rating: info.rating };
+        return seriesView(api.t, {
+          seasons: info.seasons.map((x) => ({
+            id: String(x.season),
+            title: x.season ? api.t('Season {n}', { n: x.season }) : api.t('Extras'),
+            items: x.episodes.map((e) => ({ ...episodeItem(info, e), minutes: e.duration ? Math.max(1, Math.round(e.duration / 60)) : null })),
+          })),
+        }, item);
+      }
+      return message(api.t('Nothing here.'));
     },
 
     async data(name, params) {
@@ -483,6 +496,14 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
       }
       if (name === 'epg') return epgFor(str(params.ids).split(',').slice(0, 200));
       if (name === 'guide') return guideFor(str(params.id));
+      if (name === 'now') {
+        // For the player's overlay: the channel's number and what is on now and next.
+        const id = str(params.id);
+        const nowSec = Date.now() / 1000;
+        const list = (await epgFor([id]))[id] || [];
+        const hit = (await catalog('live').catch(() => [])).find((e) => e.item.id === id)?.item;
+        return { number: hit?.number || null, now: list.find((p) => p.start <= nowSec && p.end > nowSec) || null, next: list.find((p) => p.start > nowSec) || null };
+      }
       if (name === 'channels') {
         // The channels to zap between: the same category as the channel that is playing.
         const list = await catalog('live');
@@ -490,22 +511,6 @@ ${rows ? `<section class="card wide"><h3>Channels with the most filled in</h3><d
         return cat ? list.filter((e) => e.category === cat).map((e) => e.item) : [];
       }
       return null;
-    },
-
-    async open(id) {
-      const m = /^series:([A-Za-z0-9_-]{1,64})$/.exec(id);
-      if (!m) return { type: 'message', text: api.t('Nothing here.') };
-      const info = await seriesInfo(m[1]);
-      return {
-        type: 'detail',
-        item: { id, kind: 'series', action: 'open', title: info.title, image: info.image, backdrop: info.backdrop, description: info.description, year: info.year, genre: info.genre, rating: info.rating },
-        facts: [info.year, info.genre, info.rating ? `★ ${info.rating}` : null].filter(Boolean),
-        seasons: info.seasons.map((x) => ({
-          id: String(x.season),
-          title: x.season ? api.t('Season {n}', { n: x.season }) : api.t('Episodes'),
-          items: x.episodes.map((e) => episodeItem(info, e)),
-        })),
-      };
     },
 
     async search(q) {

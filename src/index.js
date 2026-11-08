@@ -127,8 +127,11 @@ async function searchAll(q, ctx) {
 }
 
 /** Lazy data for a screen. Known names are checked so the apps can rely on their shape. */
+/** Query parameters for a plugin (without the PIN and language). */
+const paramsOf = (url) => Object.fromEntries([...url.searchParams].filter(([k]) => k !== 'pin' && k !== 'lang').map(([k, v]) => [k, v.slice(0, 2000)]));
+
 async function pluginData(id, name, url) {
-  const params = Object.fromEntries([...url.searchParams].filter(([k]) => k !== 'pin' && k !== 'lang').map(([k, v]) => [k, v.slice(0, 2000)]));
+  const params = paramsOf(url);
   const d = await plugins.call(id, 'data', [name, params, ctxOf(url)], 30000);
   if (name === 'group') return { message: d?.message ?? null, items: plugins.items(id, Array.isArray(d) ? d : d?.items, 5000) };
   if (name === 'channels') return plugins.items(id, Array.isArray(d) ? d : d?.items, 5000);
@@ -174,14 +177,10 @@ const server = http.createServer(async (req, res) => {
     let m;
     if (p === '/api/auth') return json(res, 200, { ok: true, name: settings.get('serverName') || 'Couchmate' });
     if (p === '/api/menu') return localized(res, url, menuLayout.apply(plugins.menu()));
-    if ((m = p.match(/^\/api\/screen\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,32})$/))) {
-      if (!plugins.has(m[1], 'screen')) return json(res, 404, { error: 'No such screen' });
-      return localized(res, url, plugins.screen(m[1], await plugins.call(m[1], 'screen', [m[2], ctxOf(url)], 30000)));
-    }
-    if ((m = p.match(/^\/api\/open\/([a-z0-9_-]{1,64})$/))) {
-      const id = str(url.searchParams.get('id'));
-      if (!plugins.has(m[1], 'open')) return json(res, 404, { error: 'This plugin has no detail pages' });
-      return localized(res, url, plugins.screen(m[1], await plugins.call(m[1], 'open', [id, ctxOf(url)], 30000)));
+    // A view a plugin built from building blocks: /api/view/<plugin>/<view id>?<params>.
+    if ((m = p.match(/^\/api\/view\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,32})$/))) {
+      if (!plugins.has(m[1], 'view')) return json(res, 404, { error: 'No such view' });
+      return localized(res, url, plugins.view(m[1], await plugins.call(m[1], 'view', [m[2], paramsOf(url), ctxOf(url)], 30000)));
     }
     if ((m = p.match(/^\/api\/data\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_-]{1,32})$/))) {
       if (!plugins.has(m[1], 'data')) return json(res, 404, { error: 'No such data' });

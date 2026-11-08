@@ -26,6 +26,7 @@ export class Favorites {
       image: e.image,
       live: e.live,
       action: e.action,
+      view: e.view || null,
       addedBy: e.addedBy,
       addedAt: e.addedAt,
       newCount: e.newEpisodes?.length || 0,
@@ -48,6 +49,7 @@ export class Favorites {
       image: item.image || null,
       live: Boolean(item.live),
       action: item.action === 'open' ? 'open' : 'play',
+      view: item.view || null,
       addedBy: by || null,
       addedAt: Date.now(),
       initialized: false, // the first episode check counts everything that exists as "seen"
