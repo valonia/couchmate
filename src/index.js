@@ -15,34 +15,49 @@ import { History } from './history.js';
 import { Favorites } from './favorites.js';
 import { Reminders } from './reminders.js';
 import { buildMergedEpg } from './epgmerge.js';
+import { Settings } from './settings.js';
+import { PluginHost } from './plugins.js';
+import { createAdmin } from './admin.js';
+import { installLogCapture, setLogSecrets } from './logbuf.js';
+
+installLogCapture();
 
 const env = process.env;
 const trimSlash = (s) => String(s || '').replace(/\/+$/, '');
 
 const cfg = {
   port: Number(env.PORT || 8787),
-  xtreamUrl: trimSlash(env.XTREAM_URL || 'http://localhost:9191'),
-  user: env.XTREAM_USER || '',
-  pass: env.XTREAM_PASS || '',
-  pin: env.ROOM_PIN || '',
-  streamMode: (env.STREAM_MODE || 'proxy').toLowerCase(),
-  publicXtreamUrl: trimSlash(env.PUBLIC_XTREAM_URL || env.XTREAM_URL || 'http://localhost:9191'),
   liveExt: env.LIVE_EXT || 'ts',
-  cacheMs: Number(env.CACHE_SECONDS || 300) * 1000,
-  startTimeoutMs: Number(env.START_TIMEOUT_MS || 12000),
   startDelayMs: Number(env.START_DELAY_MS || 800),
-  sharedVod: (env.SHARED_VOD || 'true').toLowerCase() !== 'false',
   cacheDir: env.CACHE_DIR || path.join(os.tmpdir(), 'synctv-cache'),
   lookaheadBytes: Number(env.SHARED_LOOKAHEAD_MB || 16) * 1024 * 1024,
   dataDir: env.DATA_DIR || path.join(process.cwd(), 'data'),
 };
 
-if (!cfg.user || !cfg.pass) {
-  console.error('XTREAM_USER och XTREAM_PASS måste sättas (Xtream-inloggning från Dispatcharr).');
-  process.exit(1);
+// Inställningar som går att ändra i adminpanelen (startvärden från .env).
+const settings = new Settings(path.join(cfg.dataDir, 'settings.json'), env);
+function applySettings() {
+  cfg.xtreamUrl = trimSlash(settings.get('xtreamUrl'));
+  cfg.user = settings.get('user');
+  cfg.pass = settings.get('pass');
+  cfg.pin = settings.get('pin');
+  cfg.streamMode = String(settings.get('streamMode')).toLowerCase();
+  cfg.publicXtreamUrl = trimSlash(settings.get('publicXtreamUrl') || settings.get('xtreamUrl'));
+  cfg.cacheMs = Number(settings.get('cacheSeconds')) * 1000;
+  cfg.startTimeoutMs = Number(settings.get('startTimeoutMs'));
+  cfg.sharedVod = Boolean(settings.get('sharedVod'));
+  cfg.upnextSeconds = Number(settings.get('upnextSeconds'));
+  cfg.reminderSwitchSeconds = Number(settings.get('reminderSwitchSeconds'));
+  cfg.reminderWarnSeconds = Number(settings.get('reminderWarnSeconds'));
+  cfg.favCheckMs = Number(settings.get('favCheckMinutes')) * 60 * 1000;
+  setLogSecrets([cfg.pin, cfg.pass, settings.get('epgPrimaryUrl'), encodeURIComponent(cfg.pin || '')]);
 }
-if (!cfg.pin) console.warn('VARNING: ROOM_PIN är inte satt – alla som når servern kan använda den.');
-if (cfg.sharedVod) {
+applySettings();
+
+if (!cfg.user || !cfg.pass) console.warn('VARNING: Xtream-inloggningen saknas – ange den i adminpanelen (/admin) eller i .env.');
+if (!cfg.pin) console.warn('VARNING: Ingen PIN-kod är satt – alla som når servern kan använda den.');
+fs.mkdirSync(cfg.cacheDir, { recursive: true });
+{
   // Rensa rester från tidigare körningar (bara innehållet – mappen kan vara en Docker-volym).
   fs.mkdirSync(cfg.cacheDir, { recursive: true });
   for (const f of fs.readdirSync(cfg.cacheDir)) fs.rmSync(path.join(cfg.cacheDir, f), { recursive: true, force: true });
@@ -374,7 +389,9 @@ const server = http.createServer(async (req, res) => {
   try {
     if (p === '/health') return json(res, 200, { ok: true });
     // Ingen webbsida – servern används av apparna (TV, Windows). En enkel kontroll att den lever:
-    if (p === '/' && req.method === 'GET') return json(res, 200, { name: 'Couchmates-server', ok: true });
+    if (p === '/' && req.method === 'GET') { res.writeHead(302, { location: '/download' }); return res.end(); }
+    if (await admin.handle(req, res, p)) return;
+    if (p.startsWith('/plugins/') && await plugins.handleHttp(req, res, p)) return;
     if (!pinOk(url.searchParams.get('pin') ?? req.headers['x-pin'])) return json(res, 401, { error: 'Fel PIN-kod' });
 
     let m;
@@ -571,6 +588,8 @@ function mutate(by, action, fn) {
   broadcastState();
   checkReady();
   saveRoom();
+  plugins.emit(action, { by, media: state.media, state: { ...state } });
+  plugins.emit('state', { by, action, state: { ...state } });
 }
 
 function startPlayback(reason) {
@@ -624,6 +643,7 @@ function handle(c, msg) {
       send(c.ws, { type: 'reminders', reminders: reminders.list() });
       broadcastMembers();
       console.log(`[rum] ${c.name} (${c.device || 'okänd enhet'}) anslöt`);
+      plugins.emit('member_join', { id: c.id, name: c.name, device: c.device });
       break;
 
     case 'ping':
@@ -856,7 +876,10 @@ server.on('upgrade', (req, socket, head) => {
     });
     ws.on('close', () => {
       clients.delete(ws);
-      if (c.name) console.log(`[rum] ${c.name} lämnade`);
+      if (c.name) {
+        console.log(`[rum] ${c.name} lämnade`);
+        plugins.emit('member_leave', { id: c.id, name: c.name, device: c.device });
+      }
       broadcastMembers();
       checkReady();
     });
@@ -865,7 +888,6 @@ server.on('upgrade', (req, socket, head) => {
 
 // ---------------------------------------------------------------- Nästa avsnitt
 
-const UPNEXT_SECONDS = Number(env.UPNEXT_SECONDS || 10);
 let upNextTimer = null;
 let checkingNext = false;
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -932,11 +954,11 @@ async function checkEnded() {
       mutate(null, 'ended', () => { state.position = dur; state.paused = true; });
       return;
     }
-    state.upNext = { media: next, startsAt: now() + UPNEXT_SECONDS * 1000 };
+    state.upNext = { media: next, startsAt: now() + cfg.upnextSeconds * 1000 };
     state.version++;
     state.action = 'upnext';
     broadcastState();
-    upNextTimer = setTimeout(() => playUpNext(null), UPNEXT_SECONDS * 1000);
+    upNextTimer = setTimeout(() => playUpNext(null), cfg.upnextSeconds * 1000);
   } finally {
     checkingNext = false;
   }
@@ -945,16 +967,18 @@ setInterval(checkEnded, 1000).unref();
 
 // ---------------------------------------------------------------- Sammanslagen tablå (EPG)
 
-const EPG_MERGE = {
-  primaryUrl: env.EPG_PRIMARY_URL || '',
+const EPG_MERGE = {};
+function applyEpgSettings() {
+  EPG_MERGE.primaryUrl = settings.get('epgPrimaryUrl') || '';
   // Reservkällor: en fil per land som visas i appen ("auto"), eller en egen lista, t.ex. "se,no".
-  countries: (env.EPG_FALLBACK_COUNTRIES || 'auto').toLowerCase(),
-  template: env.EPG_FALLBACK_TEMPLATE || 'https://epgshare01.online/epgshare01/epg_ripper_{CC}1.xml.gz',
-  extraUrls: str(env.EPG_FALLBACK_URL).split(',').map((u) => u.trim()).filter(Boolean),
-  refreshMs: Number(env.EPG_MERGE_HOURS || 3) * 3600 * 1000,
+  EPG_MERGE.countries = String(settings.get('epgFallbackCountries') || 'auto').toLowerCase();
+  EPG_MERGE.template = settings.get('epgFallbackTemplate');
+  EPG_MERGE.extraUrls = str(settings.get('epgFallbackUrl')).split(',').map((u) => u.trim()).filter(Boolean);
+  EPG_MERGE.refreshMs = Number(settings.get('epgMergeHours')) * 3600 * 1000;
   // Egna kopplingar om namnmatchningen inte räcker: "originalid=reservid,originalid2=reservid2"
-  extraMap: Object.fromEntries(str(env.EPG_FALLBACK_MAP).split(',').map((x) => x.split('=').map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1])),
-};
+  EPG_MERGE.extraMap = Object.fromEntries(str(settings.get('epgFallbackMap')).split(',').map((x) => x.split('=').map((y) => y.trim())).filter((x) => x.length === 2 && x[0] && x[1]));
+}
+applyEpgSettings();
 const EPG_FILE = path.join(cfg.dataDir, 'merged-epg.xml.gz');
 const epgMergeState = { gz: null, stats: null, builtAt: 0, building: null, error: null };
 try {
@@ -1011,16 +1035,22 @@ async function mergedEpg() {
   return epgMergeState.gz ? { gz: epgMergeState.gz } : null;
 }
 
+let epgTimer = null;
+function scheduleEpg() {
+  clearInterval(epgTimer);
+  epgTimer = null;
+  if (!EPG_MERGE.primaryUrl) return;
+  epgTimer = setInterval(rebuildEpg, EPG_MERGE.refreshMs);
+  epgTimer.unref();
+}
 if (EPG_MERGE.primaryUrl) {
   setTimeout(() => { if (!epgMergeState.gz || Date.now() - epgMergeState.builtAt > EPG_MERGE.refreshMs) rebuildEpg(); }, 5000).unref();
-  setInterval(rebuildEpg, EPG_MERGE.refreshMs).unref();
 }
+scheduleEpg();
 
 // ---------------------------------------------------------------- Påminnelser
 
 // Kanalen byts så här långt innan programmet börjar, och kortet "byter kanal om …" visas så här långt innan bytet.
-const REMINDER_SWITCH_SECONDS = Number(env.REMINDER_SWITCH_SECONDS || 30);
-const REMINDER_WARN_SECONDS = Number(env.REMINDER_WARN_SECONDS || 30);
 
 function broadcastReminders() {
   broadcast({ type: 'reminders', reminders: reminders.list() });
@@ -1055,6 +1085,7 @@ function playReminder(by) {
   });
   broadcastMembers();
   console.log(`[påminnelse] bytte till ${ch.name} för "${r.title}"`);
+  plugins.emit('reminder', { title: r.title, channel: ch, start: r.start, by });
 }
 
 /** Körs varje sekund: visar kortet när det närmar sig och byter kanal i tid. */
@@ -1068,8 +1099,8 @@ function checkReminders() {
     return;
   }
   for (const r of reminders.list()) {
-    const switchAt = (r.start - REMINDER_SWITCH_SECONDS) * 1000;
-    if (nowMs < switchAt - REMINDER_WARN_SECONDS * 1000) break; // sorterad lista – resten ligger längre fram
+    const switchAt = (r.start - cfg.reminderSwitchSeconds) * 1000;
+    if (nowMs < switchAt - cfg.reminderWarnSeconds * 1000) break; // sorterad lista – resten ligger längre fram
     if (r.end <= nowSec) continue;
     // Spelas kanalen redan behövs inget byte.
     if (state.media?.type === 'live' && state.media.id === r.channel.id) {
@@ -1094,7 +1125,6 @@ setInterval(checkReminders, 1000).unref();
 
 // ---------------------------------------------------------------- Favoriter: nya avsnitt
 
-const FAV_CHECK_MS = Number(env.FAV_CHECK_MINUTES || 30) * 60 * 1000;
 
 function broadcastFavorites() {
   broadcast({ type: 'favorites', favorites: favorites.list() });
@@ -1119,7 +1149,68 @@ async function checkAllFavorites() {
   for (const key of favorites.seriesKeys()) await checkFavorite(key);
 }
 setTimeout(checkAllFavorites, 15_000).unref();
-setInterval(checkAllFavorites, FAV_CHECK_MS).unref();
+let favTimer = setInterval(checkAllFavorites, cfg.favCheckMs);
+favTimer.unref();
+
+// ---------------------------------------------------------------- Inställningar ändras medan servern kör
+
+settings.onChange((changed) => {
+  applySettings();
+  if (changed.some((k) => ['xtreamUrl', 'user', 'pass', 'cacheSeconds'].includes(k))) { cache.clear(); searchLists.clear(); }
+  if (changed.includes('favCheckMinutes')) { clearInterval(favTimer); favTimer = setInterval(checkAllFavorites, cfg.favCheckMs); favTimer.unref(); }
+  if (changed.some((k) => k.startsWith('epg'))) {
+    applyEpgSettings();
+    scheduleEpg();
+    if (changed.some((k) => k !== 'epgMergeHours') && EPG_MERGE.primaryUrl) rebuildEpg();
+  }
+});
+
+// ---------------------------------------------------------------- Rummet för adminpanelen och plugins
+
+const ADMIN = { id: 'admin', name: 'Admin', device: 'Adminpanelen', ws: { readyState: 3 }, watching: false, readyVersion: -1 };
+const room = {
+  state: () => ({ ...state, position: currentPosition(), duration: state.media ? history.durationOf(state.media) || null : null }),
+  members: () => memberList(),
+  load: (media, by = 'Plugin') => handle({ ...ADMIN, name: by }, { type: 'load', media, position: Number(media?.position) || 0 }),
+  play: (by = 'Admin') => handle({ ...ADMIN, name: by }, { type: 'play' }),
+  pause: (by = 'Admin') => handle({ ...ADMIN, name: by }, { type: 'pause' }),
+  stop: (by = 'Admin') => handle({ ...ADMIN, name: by }, { type: 'stop' }),
+  seek: (position, by = 'Admin') => handle({ ...ADMIN, name: by }, { type: 'seek', position }),
+  kick: (id) => {
+    for (const [ws, c] of clients) if (c.id === id) { console.log(`[admin] kopplade bort ${c.name}`); ws.close(4000, 'Bortkopplad av admin'); return true; }
+    return false;
+  },
+  /** Ett kort meddelande till alla appar (visas som en notis där det stöds). */
+  notify: (text) => broadcast({ type: 'notice', text: clean(text, 300) }),
+};
+
+const plugins = new PluginHost({ dir: path.join(cfg.dataDir, 'plugins'), stateFile: path.join(cfg.dataDir, 'plugins.json'), room });
+
+const admin = createAdmin({
+  dataDir: cfg.dataDir,
+  settings,
+  plugins,
+  room,
+  favorites,
+  reminders,
+  history,
+  pinOk,
+  epgStatus: () => ({
+    enabled: Boolean(EPG_MERGE.primaryUrl),
+    builtAt: epgMergeState.builtAt || null,
+    building: Boolean(epgMergeState.building),
+    error: epgMergeState.error,
+    stats: epgMergeState.stats,
+  }),
+  rebuildEpg: () => (EPG_MERGE.primaryUrl ? rebuildEpg() : Promise.resolve()),
+  cacheStatus: () => (shared ? { key: shared.key, size: shared.size, downloaded: shared.downloadedBytes(), complete: shared.complete } : null),
+  removeData: (kind, key) => {
+    if (kind === 'reminders') { if (reminders.remove(key)) broadcastReminders(); if (state.reminder?.key === key) clearReminder(true); }
+    else if (kind === 'favorites') { if (favorites.remove(key)) broadcastFavorites(); }
+    else if (kind === 'history') { if (key) history.remove(key); else history.clear(); }
+  },
+});
+
 
 // Uppdatera positionen i historiken medan något spelas.
 setInterval(() => {
@@ -1138,7 +1229,8 @@ setInterval(() => {
 restoreRoom();
 
 server.listen(cfg.port, () => {
-  console.log(`Couchmates-server lyssnar på port ${cfg.port}`);
+  console.log(`Couchmates-server lyssnar på port ${cfg.port}  (admin: /admin, nedladdningar: /download)`);
+  plugins.loadAll().catch((e) => console.warn('[plugin]', e.message));
   console.log(`Dispatcharr: ${cfg.xtreamUrl}  (strömläge: ${cfg.streamMode})`);
   // Värm upp sökkatalogen så att första sökningen går snabbt (och håll den varm).
   const warm = () => {
