@@ -1429,6 +1429,8 @@ const room = {
 };
 
 const plugins = new PluginHost({ dir: path.join(cfg.dataDir, 'plugins'), stateFile: path.join(cfg.dataDir, 'plugins.json'), room });
+// Apparna hämtar källorna (menyn) på nytt så fort ett plugin ändras.
+plugins.onChange = () => broadcast({ type: 'sources_changed' });
 
 const admin = createAdmin({
   dataDir: cfg.dataDir,

@@ -69,6 +69,8 @@ export class PluginHost {
     const out = {};
     for (const [id, p] of this.plugins) out[id] = { enabled: p.enabled, settings: p.settings };
     fs.writeFileSync(this.stateFile, JSON.stringify(out, null, 1));
+    // Något har installerats, slagits på/av eller tagits bort – låt apparna uppdatera menyn direkt.
+    try { this.onChange?.(); } catch { /* ingen lyssnare */ }
   }
 
   /** Hittar alla .mjs-filer i plugin-mappen och startar de som är påslagna. */
