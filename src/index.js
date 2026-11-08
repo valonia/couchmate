@@ -15,17 +15,6 @@ import { History } from './history.js';
 import { Favorites } from './favorites.js';
 import { Reminders } from './reminders.js';
 import { buildMergedEpg } from './epgmerge.js';
-import { fileURLToPath } from 'node:url';
-
-// Webbklienten (hemsidan) ligger i ../web och serveras av samma server.
-const WEB_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'web');
-const STATIC = {
-  '/': ['index.html', 'text/html; charset=utf-8'],
-  '/index.html': ['index.html', 'text/html; charset=utf-8'],
-  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
-  '/style.css': ['style.css', 'text/css; charset=utf-8'],
-  '/vendor/mpegts.js': [path.join('..', 'node_modules', 'mpegts.js', 'dist', 'mpegts.js'), 'text/javascript; charset=utf-8'],
-};
 
 const env = process.env;
 const trimSlash = (s) => String(s || '').replace(/\/+$/, '');
@@ -384,16 +373,8 @@ const server = http.createServer(async (req, res) => {
   const p = url.pathname;
   try {
     if (p === '/health') return json(res, 200, { ok: true });
-    if (STATIC[p] && req.method === 'GET') {
-      const [file, type] = STATIC[p];
-      try {
-        const body = fs.readFileSync(path.join(WEB_DIR, file));
-        res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' });
-        return res.end(body);
-      } catch {
-        return json(res, 404, { error: 'Webbklienten saknas' });
-      }
-    }
+    // Ingen webbsida – servern används av apparna (TV, Windows). En enkel kontroll att den lever:
+    if (p === '/' && req.method === 'GET') return json(res, 200, { name: 'Couchmates-server', ok: true });
     if (!pinOk(url.searchParams.get('pin') ?? req.headers['x-pin'])) return json(res, 401, { error: 'Fel PIN-kod' });
 
     let m;

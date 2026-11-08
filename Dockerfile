@@ -3,7 +3,6 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --omit=dev && npm cache clean --force
 COPY src ./src
-COPY web ./web
 RUN mkdir -p /cache /data && chown node:node /cache /data
 ENV DATA_DIR=/data
 ENV PORT=8787
