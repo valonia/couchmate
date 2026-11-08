@@ -1,9 +1,14 @@
 {
   "id": "twitch",
   "name": "Twitch",
-  "version": "1.2.0",
-  "description": "Twitch i Couchmates: populära liveströmmar i menyn, Twitch-träffar i sök och liveströmmar som spelas synkat för alla.",
+  "version": "2.0.0",
+  "description": "Popular live streams in the menu, Twitch channels in search, live chat, and streams that play in sync for everyone.",
   "main": "index.mjs",
-  "requires": "Internetanslutning från servern till twitch.tv. Ingen extra Docker-container eller Twitch-konto behövs.",
-  "homepage": "https://github.com/valonia/couchmates/tree/main/server/plugins/twitch"
+  "requires": "Internet access from the server to twitch.tv. No Twitch account needed.",
+  "settings": [
+    { "key": "channels", "label": "Your channels (shown first when they are live)", "type": "text", "default": "", "help": "Twitch names separated by commas, e.g. \"lofigirl, xqc\"." },
+    { "key": "language", "label": "Extra row for a language", "type": "text", "default": "", "help": "Shows a row of popular streams in that language, e.g. \"sv\". Empty = no such row." },
+    { "key": "count", "label": "Number of popular streams (at most 30)", "type": "number", "default": 30 },
+    { "key": "clientId", "label": "Client ID", "type": "text", "default": "kimne78kx3ncx6brgo4mv6wki5h1ko", "help": "The client ID Twitch's website uses. Only change it if Twitch changes something." }
+  ]
 }

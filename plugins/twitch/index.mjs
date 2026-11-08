@@ -1,28 +1,21 @@
-// Twitch-plugin för Couchmates.
-// - "Twitch" i appens meny: populära liveströmmar (och dina egna kanaler om du anger dem).
-// - Sök i appen hittar även Twitch-kanaler som sänder just nu.
-// - Liveströmmen spelas synkat för alla, precis som en TV-kanal.
+// Twitch plugin for Couchmate.
+// - "Twitch" in the app menu: popular live streams (and your own channels if you list them).
+// - Search in the app also finds Twitch channels that are live right now.
+// - The live stream plays in sync for everyone, with the chat next to it.
 //
-// Data hämtas från Twitchs publika webbgränssnitt (samma sätt som t.ex. Streamlink och VLC gör),
-// så inget Twitch-konto behövs. Ändrar Twitch något kan klient-id:t bytas i inställningarna.
+// Data comes from Twitch's public web interface (the same way Streamlink and VLC do it),
+// so no Twitch account is needed. If Twitch changes something, the client ID can be changed in the settings.
 
 const GQL = 'https://gql.twitch.tv/gql';
 const USHER = 'https://usher.ttvnw.net/api/channel/hls';
 const CHAT = 'wss://irc-ws.chat.twitch.tv:443';
 const LOGO = 'M11.64 5.93h1.43v4.28h-1.43m3.93-4.28H17v4.28h-1.43M7 2 3.43 5.57v12.86h4.28V22l3.58-3.57h2.85L20.57 12V2m-1.43 9.29-2.85 2.85h-2.86l-2.5 2.5v-2.5H7.71V3.43h11.43z';
-
-export const meta = {
-  settings: [
-    { key: 'channels', label: 'Dina kanaler (visas överst när de sänder)', type: 'text', default: '', help: 'Twitch-namn separerade med komma, t.ex. "lofigirl, xqc".' },
-    { key: 'language', label: 'Språk för egen rad', type: 'text', default: 'sv', help: 'Visar en rad med populära strömmar på det språket, t.ex. "sv". Tomt = ingen sådan rad.' },
-    { key: 'count', label: 'Antal populära strömmar (högst 30)', type: 'number', default: 30 },
-    { key: 'clientId', label: 'Klient-id', type: 'text', default: 'kimne78kx3ncx6brgo4mv6wki5h1ko', help: 'Det klient-id som Twitchs webbsida använder. Byt bara om Twitch ändrar något.' },
-  ],
-};
+const DEFAULT_CLIENT = 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+const LOGIN = /^[A-Za-z0-9_]{1,40}$/;
 
 export default function setup(api) {
-  const open = new Set(); // öppna chattar (stoppfunktioner)
-  const clientId = () => api.settings.clientId || 'kimne78kx3ncx6brgo4mv6wki5h1ko';
+  const open = new Set(); // open chats (stop functions)
+  const clientId = () => api.settings.clientId || DEFAULT_CLIENT;
 
   async function gql(query, variables = {}) {
     const r = await fetch(GQL, {
@@ -31,9 +24,9 @@ export default function setup(api) {
       body: JSON.stringify({ query, variables }),
       signal: AbortSignal.timeout(10000),
     });
-    if (!r.ok) throw new Error(`Twitch svarade ${r.status}`);
+    if (!r.ok) throw new Error(`Twitch answered ${r.status}`);
     const d = await r.json();
-    if (d.errors?.length) throw new Error(d.errors[0].message || 'Twitch gav ett fel');
+    if (d.errors?.length) throw new Error(d.errors[0].message || 'Twitch returned an error');
     return d.data;
   }
 
@@ -42,19 +35,20 @@ export default function setup(api) {
     broadcaster { login displayName }
     game { displayName }`;
 
-  // Bilden byts ut ungefär var femte minut hos Twitch – lägg till en tidsstämpel så att den inte cachas för länge.
+  // Twitch replaces the preview about every five minutes – add a timestamp so it is not cached too long.
   const fresh = (u) => (u ? `${u}${u.includes('?') ? '&' : '?'}t=${Math.floor(Date.now() / 300000)}` : null);
 
   const toItem = (s) => s?.broadcaster?.login && {
     id: s.broadcaster.login,
+    kind: 'stream',
+    live: true,
     title: s.title || s.broadcaster.displayName,
     subtitle: [s.broadcaster.displayName, s.game?.displayName].filter(Boolean).join(' · '),
     image: fresh(s.previewImageURL),
-    live: true,
     viewers: s.viewersCount,
   };
 
-  /** Populära strömmar (Twitch ger högst 30 per anrop utan extra verifiering). */
+  /** Popular streams (Twitch gives at most 30 per request without extra verification). */
   async function popular(count, language) {
     const first = Math.min(30, Math.max(1, count));
     const opts = language ? ', options: { broadcasterLanguages: [$lang] }' : '';
@@ -75,34 +69,35 @@ export default function setup(api) {
 
   api.source({
     name: 'Twitch',
-    iconPath: LOGO,
+    icon: LOGO,
 
-    // Spelaren: pluginet bestämmer knapparna och vad som finns i inställningarna.
+    // The player: this plugin decides the keys and what is in the settings panel.
     player: {
       keys: { ok: 'pause', down: 'settings', right: 'chat', left: 'none', up: 'info' },
       settings: [
-        { type: 'chat', title: 'Chatt' },
-        { type: 'quality', title: 'Kvalitet' },
+        { type: 'chat', title: api.t('Chat') },
+        { type: 'quality', title: api.t('Quality') },
         {
-          type: 'choice', id: 'latency', title: 'Fördröjning', default: 'low',
-          options: [{ id: 'low', label: 'Låg (närmare live)' }, { id: 'normal', label: 'Normal (stabilare)' }],
+          type: 'choice', id: 'latency', title: api.t('Latency'), default: 'low',
+          options: [{ id: 'low', label: api.t('Low (closer to live)') }, { id: 'normal', label: api.t('Normal (more stable)') }],
         },
       ],
     },
 
-    async browse() {
+    async screen() {
       const s = api.settings;
-      const own = String(s.channels || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => /^[a-z0-9_]{1,40}$/.test(x));
+      const own = String(s.channels || '').split(',').map((x) => x.trim().toLowerCase()).filter((x) => LOGIN.test(x));
+      const lang = String(s.language || '').trim().toLowerCase();
       const [mine, local, top] = await Promise.all([
-        channels(own).catch((e) => { api.log(`dina kanaler: ${e.message}`); return []; }),
-        s.language ? popular(30, s.language).catch((e) => { api.log(`språkraden: ${e.message}`); return []; }) : [],
+        channels(own).catch((e) => { api.log(`your channels: ${e.message}`); return []; }),
+        lang ? popular(30, lang).catch((e) => { api.log(`language row: ${e.message}`); return []; }) : [],
         popular(Number(s.count) || 30),
       ]);
-      const sections = [];
-      if (mine.length) sections.push({ id: 'mine', title: 'Dina kanaler', items: mine });
-      if (local.length) sections.push({ id: 'lang', title: `Populärt på ${String(s.language).toLowerCase() === 'sv' ? 'svenska' : String(s.language).toUpperCase()}`, items: local });
-      sections.push({ id: 'top', title: 'Populärt just nu', items: top });
-      return { sections };
+      const rows = [];
+      if (mine.length) rows.push({ id: 'mine', title: api.t('Your channels'), items: mine });
+      if (local.length) rows.push({ id: 'lang', title: api.t('Popular in {language}', { language: lang.toUpperCase() }), items: local });
+      rows.push({ id: 'top', title: api.t('Popular right now'), items: top });
+      return { type: 'rows', rows };
     },
 
     async search(q) {
@@ -119,22 +114,30 @@ export default function setup(api) {
     },
 
     async resolve(login, { options = {} } = {}) {
-      if (!/^[A-Za-z0-9_]{1,40}$/.test(login)) throw new Error('Ogiltigt kanalnamn');
+      if (!LOGIN.test(login)) throw new Error('Invalid channel name');
       const d = await gql(`query($login: String!) {
         streamPlaybackAccessToken(channelName: $login, params: { platform: "web", playerBackend: "mediaplayer", playerType: "site" }) { value signature }
+        user(login: $login) { displayName stream { title game { displayName } } }
       }`, { login: login.toLowerCase() });
       const tok = d.streamPlaybackAccessToken;
-      if (!tok) throw new Error('Kanalen sänder inte just nu');
+      if (!tok || !d.user?.stream) throw new Error('The channel is not live right now');
       const qs = new URLSearchParams({
         sig: tok.signature, token: tok.value, allow_source: 'true', allow_audio_only: 'true',
         fast_bread: options.latency === 'normal' ? 'false' : 'true', p: String(Math.floor(Math.random() * 1e7)),
       });
-      return { url: `${USHER}/${login.toLowerCase()}.m3u8?${qs}` };
+      return {
+        url: `${USHER}/${login.toLowerCase()}.m3u8?${qs}`,
+        type: 'hls',
+        live: true,
+        kind: 'stream',
+        title: d.user.stream.title || d.user.displayName,
+        subtitle: [d.user.displayName, d.user.stream.game?.displayName].filter(Boolean).join(' · '),
+      };
     },
 
-    /** Livechatt: läser kanalens chatt anonymt (bara läsning, inget konto). */
+    /** Live chat: reads the channel's chat anonymously (read only, no account). */
     chat(login, onMessage) {
-      if (!/^[A-Za-z0-9_]{1,40}$/.test(login)) throw new Error('Ogiltigt kanalnamn');
+      if (!LOGIN.test(login)) throw new Error('Invalid channel name');
       const chan = login.toLowerCase();
       let ws = null;
       let stopped = false;
@@ -168,13 +171,13 @@ export default function setup(api) {
           retry = setTimeout(connect, wait);
           wait = Math.min(wait * 2, 60000);
         };
-        ws.onerror = () => { /* onclose kommer efteråt */ };
+        ws.onerror = () => { /* onclose follows */ };
       };
       connect();
       const stop = () => {
         stopped = true;
         clearTimeout(retry);
-        try { ws?.close(); } catch { /* redan stängd */ }
+        try { ws?.close(); } catch { /* already closed */ }
         open.delete(stop);
       };
       open.add(stop);
@@ -182,6 +185,6 @@ export default function setup(api) {
     },
   });
 
-  // Stäng alla chattar när pluginet stängs av.
+  // Close every chat when the plugin is switched off.
   return () => { for (const stop of [...open]) stop(); };
 }

@@ -1,4 +1,4 @@
-// Couchmates admin – inloggning, översikt, rummet, inställningar, data, tablå, nedladdningar, plugins och logg.
+// Couchmate admin – login, overview, the room, settings, plugins, data, downloads, the log and the account.
 'use strict';
 
 const $ = (s) => document.querySelector(s);
@@ -21,7 +21,6 @@ const ICONS = {
   overview: 'M3 13h8V3H3v10zm0 8h8v-6H3v6zm10 0h8V11h-8v10zm0-18v6h8V3h-8z',
   settings: 'M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87a.47.47 0 0 0 .12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32a.47.47 0 0 0-.12-.61l-2.01-1.58zM12 15.6A3.6 3.6 0 1 1 12 8.4a3.6 3.6 0 0 1 0 7.2z',
   data: 'M12 3C7.58 3 4 4.79 4 7v10c0 2.21 3.59 4 8 4s8-1.79 8-4V7c0-2.21-3.58-4-8-4zm0 2c3.87 0 6 1.5 6 2s-2.13 2-6 2-6-1.5-6-2 2.13-2 6-2zm6 12c0 .5-2.13 2-6 2s-6-1.5-6-2v-2.23c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V17zm0-5c0 .5-2.13 2-6 2s-6-1.5-6-2V9.77c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V12z',
-  guide: 'M19 3h-1V1h-2v2H8V1H6v2H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2zm0 16H5V8h14v11zM7 10h5v5H7z',
   downloads: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   plugins: 'M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z',
   logs: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
@@ -35,7 +34,7 @@ const icon = (name) => {
   return s;
 };
 
-// ---------------------------------------------------------------- hjälpare
+// ---------------------------------------------------------------- helpers
 
 async function api(path, { method = 'GET', body, raw } = {}) {
   const r = await fetch(`/admin/api${path}`, {
@@ -45,8 +44,8 @@ async function api(path, { method = 'GET', body, raw } = {}) {
     credentials: 'same-origin',
   });
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && path !== '/login' && path !== '/setup') { start(); throw new Error('Inte inloggad'); }
-  if (!r.ok) throw new Error(data.error || `Fel ${r.status}`);
+  if (r.status === 401 && path !== '/login' && path !== '/setup') { start(); throw new Error('Not logged in'); }
+  if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
   return data;
 }
 
@@ -70,15 +69,17 @@ const fmtSize = (n) => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n
 const fmtAgo = (ms) => {
   if (!ms) return '–';
   const s = Math.round((Date.now() - ms) / 1000);
-  if (s < 60) return `${s} s sedan`;
-  if (s < 3600) return `${Math.round(s / 60)} min sedan`;
-  if (s < 86400) return `${Math.round(s / 3600)} h sedan`;
-  return new Date(ms).toLocaleString('sv-SE', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+  if (s < 60) return `${s} s ago`;
+  if (s < 3600) return `${Math.round(s / 60)} min ago`;
+  if (s < 86400) return `${Math.round(s / 3600)} h ago`;
+  return new Date(ms).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 };
 const fmtUptime = (s) => (s < 3600 ? `${Math.round(s / 60)} min` : s < 86400 ? `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min` : `${Math.floor(s / 86400)} d ${Math.floor((s % 86400) / 3600)} h`);
-const fmtDate = (sec) => new Date(sec * 1000).toLocaleString('sv-SE', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+const fmtDate = (sec) => new Date(sec * 1000).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+/** Plain text of something a plugin sent (api.t() text arrives as { $t }). */
+const txt = (v) => (v && typeof v === 'object' && typeof v.$t === 'string' ? v.$t : v ?? '');
 
-/** Knapp som kräver ett andra klick för att bekräfta (inga dialogrutor). */
+/** A button that needs a second click to confirm (no dialogs). */
 function confirmBtn(label, confirmLabel, onConfirm, cls = 'btn danger small') {
   const b = h('button', { class: cls, type: 'button' }, label);
   let armed = null;
@@ -96,7 +97,7 @@ function confirmBtn(label, confirmLabel, onConfirm, cls = 'btn danger small') {
   return b;
 }
 
-// ---------------------------------------------------------------- inloggning
+// ---------------------------------------------------------------- login
 
 async function start() {
   stopTimers();
@@ -104,46 +105,43 @@ async function start() {
   if (s.loggedIn) return shell();
   const err = h('p', { class: 'error', role: 'alert' });
   const setup = s.setupNeeded;
-  const pin = h('input', { type: 'password', id: 'pin', autocomplete: 'off', placeholder: 'Rummets PIN-kod' });
-  const pw = h('input', { type: 'password', id: 'pw', autocomplete: setup ? 'new-password' : 'current-password', placeholder: setup ? 'Minst 8 tecken' : 'Adminlösenord' });
-  const pw2 = h('input', { type: 'password', id: 'pw2', autocomplete: 'new-password', placeholder: 'Samma lösenord igen' });
+  const pw = h('input', { type: 'password', id: 'pw', autocomplete: setup ? 'new-password' : 'current-password', placeholder: setup ? 'At least 8 characters' : 'Admin password' });
+  const pw2 = h('input', { type: 'password', id: 'pw2', autocomplete: 'new-password', placeholder: 'The same password again' });
   const form = h('form', { class: 'auth-form', onsubmit: run(async (e) => {
     e.preventDefault();
     err.textContent = '';
     try {
       if (setup) {
-        if (pw.value !== pw2.value) throw new Error('Lösenorden är inte likadana');
-        await api('/setup', { method: 'POST', body: { pin: pin.value, password: pw.value } });
+        if (pw.value !== pw2.value) throw new Error('The passwords do not match');
+        await api('/setup', { method: 'POST', body: { password: pw.value } });
       } else {
         await api('/login', { method: 'POST', body: { password: pw.value } });
       }
       shell();
     } catch (x) { err.textContent = x.message; }
   }) },
-  h('h1', {}, 'Couch', h('span', { class: 'brand-a' }, 'mates'), h('span', { class: 'faint', style: { fontWeight: 400 } }, ' admin')),
+  h('h1', {}, 'Couch', h('span', { class: 'brand-a' }, 'mate'), h('span', { class: 'faint', style: { fontWeight: 400 } }, ' admin')),
   setup
-    ? h('p', {}, 'Skapa ett adminlösenord. För att bevisa att det är du som har servern behövs rummets PIN-kod (den som apparna använder).')
-    : h('p', {}, 'Logga in med adminlösenordet.'),
-  setup && h('label', { for: 'pin', class: 'muted' }, 'PIN-kod'), setup && pin,
-  h('label', { for: 'pw', class: 'muted' }, setup ? 'Nytt adminlösenord' : 'Lösenord'), pw,
-  setup && h('label', { for: 'pw2', class: 'muted' }, 'Upprepa lösenordet'), setup && pw2,
-  h('button', { class: 'btn primary', type: 'submit', style: { justifyContent: 'center', marginTop: '6px' } }, setup ? 'Skapa och logga in' : 'Logga in'),
+    ? h('p', {}, 'Welcome! Start by creating the admin password. It protects this panel, where you set the PIN code for the apps and choose plugins.')
+    : h('p', {}, 'Log in with the admin password.'),
+  h('label', { for: 'pw', class: 'muted' }, setup ? 'New admin password' : 'Password'), pw,
+  setup && h('label', { for: 'pw2', class: 'muted' }, 'Repeat the password'), setup && pw2,
+  h('button', { class: 'btn primary', type: 'submit', style: { justifyContent: 'center', marginTop: '6px' } }, setup ? 'Create and log in' : 'Log in'),
   err);
   fill($('#app'), h('div', { class: 'auth' }, form));
-  (setup ? pin : pw).focus();
+  pw.focus();
 }
 
-// ---------------------------------------------------------------- skal + navigering
+// ---------------------------------------------------------------- shell + navigation
 
 const PAGES = [
-  ['overview', 'Översikt', renderOverview],
-  ['settings', 'Inställningar', renderSettings],
-  ['guide', 'Tablå', renderGuide],
-  ['data', 'Påminnelser och data', renderData],
-  ['downloads', 'Nedladdningar', renderDownloads],
+  ['overview', 'Overview', renderOverview],
+  ['settings', 'Settings', renderSettings],
   ['plugins', 'Plugins', renderPlugins],
-  ['logs', 'Logg', renderLogs],
-  ['account', 'Konto', renderAccount],
+  ['data', 'Reminders and data', renderData],
+  ['downloads', 'Downloads', renderDownloads],
+  ['logs', 'Log', renderLogs],
+  ['account', 'Account', renderAccount],
 ];
 let page = (location.hash || '#overview').slice(1);
 let timers = [];
@@ -151,11 +149,11 @@ const stopTimers = () => { timers.forEach((t) => (typeof t === 'function' ? t() 
 
 function shell() {
   const main = h('main', { class: 'main', id: 'main' });
-  const side = h('nav', { class: 'side', 'aria-label': 'Meny' },
-    h('div', { class: 'brand' }, h('span', { class: 'logo' }), h('div', {}, h('span', {}, 'Couch', h('span', { class: 'brand-a' }, 'mates')), h('small', {}, 'Admin'))),
+  const side = h('nav', { class: 'side', 'aria-label': 'Menu' },
+    h('div', { class: 'brand' }, h('span', { class: 'logo' }), h('div', {}, h('span', {}, 'Couch', h('span', { class: 'brand-a' }, 'mate')), h('small', {}, 'Admin'))),
     PAGES.map(([id, label]) => h('button', { class: `nav ${page === id ? 'on' : ''}`, 'data-page': id, onclick: () => go(id) }, icon(id), h('span', {}, label))),
     h('div', { class: 'spacer' }),
-    h('div', { class: 'foot' }, h('a', { href: '/download', target: '_blank', rel: 'noopener' }, 'Nedladdningssidan ↗')));
+    h('div', { class: 'foot' }, h('a', { href: '/download', target: '_blank', rel: 'noopener' }, 'Download page ↗')));
   fill($('#app'), h('div', { class: 'shell' }, side, main));
   go(PAGES.some(([id]) => id === page) ? page : 'overview');
 }
@@ -166,128 +164,133 @@ function go(id) {
   history.replaceState(null, '', `#${id}`);
   document.querySelectorAll('.nav').forEach((n) => n.classList.toggle('on', n.dataset.page === id));
   const [, label, render] = PAGES.find(([p]) => p === id);
-  document.title = `${label} – Couchmates admin`;
+  document.title = `${label} – Couchmate admin`;
   const main = $('#main');
-  fill(main, h('p', { class: 'faint' }, 'Laddar…'));
+  fill(main, h('p', { class: 'faint' }, 'Loading…'));
   run(render)(main);
 }
 
 const head = (title, text, ...actions) => h('div', { class: 'page-head' }, h('h2', {}, title), text && h('p', {}, text), ...actions);
+const link = (label, target) => h('a', { href: `#${target}`, onclick: (ev) => { ev.preventDefault(); go(target); } }, label);
 
-// ---------------------------------------------------------------- översikt
+// ---------------------------------------------------------------- overview
 
 async function renderOverview(main) {
+  const setupCard = h('section', { class: 'card wide', hidden: true });
   const nowCard = h('section', { class: 'card wide' });
   const members = h('section', { class: 'card wide' });
   const server = h('section', { class: 'card' });
-  const epg = h('section', { class: 'card' });
   const plug = h('section', { class: 'card' });
-  fill(main, head('Översikt', 'Vad som händer i rummet just nu. Uppdateras varannan sekund.'), h('div', { class: 'grid' }, nowCard, members, server, epg, plug));
+  fill(main, head('Overview', 'What is happening in the room right now. Updates every other second.'), h('div', { class: 'grid' }, setupCard, nowCard, members, server, plug));
 
   const update = async () => {
     const d = await api('/overview');
     const st = d.state, m = st.media;
     const skew = Date.now() - d.serverNow;
-    const pos = m && m.type !== 'live' ? (st.paused ? st.position : st.position + Math.max(0, (Date.now() - skew - st.refTime) / 1000)) : 0;
+    const live = Boolean(m?.live);
+    const pos = m && !live ? (st.paused ? st.position : st.position + Math.max(0, (Date.now() - skew - st.refTime) / 1000)) : 0;
     const dur = m && st.duration;
-    fill(nowCard, h('h3', {}, 'Nu spelas', h('span', { class: 'grow' }),
-      m && (m.type === 'live' ? h('span', { class: 'pill live' }, 'LIVE') : null),
-      m && h('span', { class: `pill ${st.waiting ? 'warn' : st.paused ? '' : 'ok'}` }, st.waiting ? 'Väntar på alla' : st.paused ? 'Pausad' : 'Spelar')),
+
+    // Getting started: shown until the apps can connect and there is something to watch.
+    const steps = [
+      [d.setup.pin, 'Set a PIN code for the apps', 'settings'],
+      [d.setup.plugins, 'Install and switch on at least one plugin, e.g. IPTV or Twitch', 'plugins'],
+    ];
+    setupCard.hidden = steps.every(([done]) => done);
+    fill(setupCard, h('h3', {}, 'Get started'), h('ol', { class: 'steps' },
+      steps.map(([done, label, target]) => h('li', { class: done ? 'done' : '' }, done ? h('s', {}, label) : link(label, target)))));
+
+    fill(nowCard, h('h3', {}, 'Now playing', h('span', { class: 'grow' }),
+      live ? h('span', { class: 'pill live' }, 'LIVE') : null,
+      m && h('span', { class: `pill ${st.waiting ? 'warn' : st.paused ? '' : 'ok'}` }, st.waiting ? 'Waiting for everyone' : st.paused ? 'Paused' : 'Playing')),
     m ? h('div', { class: 'now' },
-      h('div', { class: 'art', style: m.icon ? { backgroundImage: `url("${m.icon}")` } : {} }),
+      h('div', { class: 'art', style: /^https?:/.test(m.image || '') ? { backgroundImage: `url("${m.image}")` } : {} }),
       h('div', { style: { flex: 1, minWidth: 0 } },
-        h('div', { class: 'title' }, m.title),
-        h('div', { class: 'muted' }, [m.subtitle, st.changedBy && `startad av ${st.changedBy}`].filter(Boolean).join('  ·  ')),
-        m.type !== 'live' && h('div', { class: 'row', style: { marginTop: '10px' } },
+        h('div', { class: 'title' }, txt(m.title)),
+        h('div', { class: 'muted' }, [txt(m.subtitle), m.plugin, st.changedBy && `started by ${st.changedBy}`].filter(Boolean).join('  ·  ')),
+        !live && h('div', { class: 'row', style: { marginTop: '10px' } },
           h('span', { class: 'faint', style: { fontVariantNumeric: 'tabular-nums' } }, fmtTime(pos)),
           dur ? h('div', { class: 'bar', style: { flex: 1, maxWidth: '360px' } }, h('i', { style: { width: `${Math.min(100, (pos / dur) * 100)}%` } })) : null),
         h('div', { class: 'row controls' },
           st.paused
-            ? h('button', { class: 'btn primary small', onclick: run(() => api('/room/play', { method: 'POST', body: {} }).then(update)) }, '▶ Spela')
-            : h('button', { class: 'btn small', onclick: run(() => api('/room/pause', { method: 'POST', body: {} }).then(update)) }, '❚❚ Pausa'),
-          m.type !== 'live' && h('button', { class: 'btn small', onclick: run(() => api('/room/seek', { method: 'POST', body: { position: Math.max(0, pos - 30) } }).then(update)) }, '−30 s'),
-          m.type !== 'live' && h('button', { class: 'btn small', onclick: run(() => api('/room/seek', { method: 'POST', body: { position: pos + 30 } }).then(update)) }, '+30 s'),
-          confirmBtn('■ Stoppa för alla', 'Klicka igen för att stoppa', () => api('/room/stop', { method: 'POST', body: {} }).then(update)))))
-      : h('p', { class: 'empty' }, 'Inget spelas just nu.'),
-    st.reminder && h('p', { class: 'notice', style: { marginTop: '14px' } }, h('b', {}, 'Påminnelse: '), `${st.reminder.title} – byter till ${st.reminder.channel?.name} om ${Math.max(0, Math.round((st.reminder.switchAt - d.serverNow) / 1000))} s`));
+            ? h('button', { class: 'btn primary small', onclick: run(() => api('/room/play', { method: 'POST', body: {} }).then(update)) }, '▶ Play')
+            : h('button', { class: 'btn small', onclick: run(() => api('/room/pause', { method: 'POST', body: {} }).then(update)) }, '❚❚ Pause'),
+          !live && h('button', { class: 'btn small', onclick: run(() => api('/room/seek', { method: 'POST', body: { position: Math.max(0, pos - 30) } }).then(update)) }, '−30 s'),
+          !live && h('button', { class: 'btn small', onclick: run(() => api('/room/seek', { method: 'POST', body: { position: pos + 30 } }).then(update)) }, '+30 s'),
+          confirmBtn('■ Stop for everyone', 'Click again to stop', () => api('/room/stop', { method: 'POST', body: {} }).then(update)))))
+      : h('p', { class: 'empty' }, 'Nothing is playing right now.'),
+    st.reminder && h('p', { class: 'notice', style: { marginTop: '14px' } }, h('b', {}, 'Reminder: '),
+      `${st.reminder.title} – switching to ${st.reminder.channel?.title} in ${Math.max(0, Math.round((st.reminder.switchAt - d.serverNow) / 1000))} s`));
 
-    fill(members, h('h3', {}, `Anslutna  ${d.members.length}`),
+    fill(members, h('h3', {}, `Connected  ${d.members.length}`),
       d.members.length ? h('div', { class: 'table-wrap' }, h('table', {},
-        h('thead', {}, h('tr', {}, h('th', {}, 'Namn'), h('th', {}, 'Enhet'), h('th', {}, 'Läge'), h('th', {}, 'Synk'), h('th', {}, 'Status'), h('th', {}, 'Senaste rapport'), h('th', {}))),
+        h('thead', {}, h('tr', {}, h('th', {}, 'Name'), h('th', {}, 'Device'), h('th', {}, 'Language'), h('th', {}, 'Mode'), h('th', {}, 'Sync'), h('th', {}, 'Status'), h('th', {}, 'Last report'), h('th', {}))),
         h('tbody', {}, d.members.map((x) => {
           const drift = x.drift == null ? null : Math.round(x.drift * 1000);
           const cls = drift == null ? 'faint' : Math.abs(drift) < 300 ? 'drift-ok' : Math.abs(drift) < 1000 ? 'drift-warn' : 'drift-bad';
           return h('tr', {},
             h('td', {}, h('b', {}, x.name)),
             h('td', { class: 'muted' }, x.device || '–'),
-            h('td', {}, h('span', { class: `pill ${x.watching ? 'ok' : ''}` }, x.watching ? 'Tittar' : 'Bläddrar')),
+            h('td', { class: 'muted' }, x.lang || 'en'),
+            h('td', {}, h('span', { class: `pill ${x.watching ? 'ok' : ''}` }, x.watching ? 'Watching' : 'Browsing')),
             h('td', { class: `num ${cls}` }, drift == null ? '–' : `${drift > 0 ? '+' : ''}${drift} ms`),
             h('td', { class: 'muted' }, x.status || '–'),
-            h('td', { class: 'faint' }, x.reportAge == null ? '–' : `${x.reportAge} s sedan`),
-            h('td', { class: 'act' }, confirmBtn('Koppla bort', 'Säker?', () => api('/room/kick', { method: 'POST', body: { id: x.id } }).then(update))));
-        })))) : h('p', { class: 'empty' }, 'Ingen är ansluten.'));
+            h('td', { class: 'faint' }, x.reportAge == null ? '–' : `${x.reportAge} s ago`),
+            h('td', { class: 'act' }, confirmBtn('Disconnect', 'Sure?', () => api('/room/kick', { method: 'POST', body: { id: x.id } }).then(update))));
+        })))) : h('p', { class: 'empty' }, 'No one is connected.'));
 
-    fill(server, h('h3', {}, 'Servern'), h('dl', { class: 'kv' },
-      h('dt', {}, 'Igång'), h('dd', {}, fmtUptime(d.server.uptime)),
-      h('dt', {}, 'Dispatcharr'), h('dd', {}, d.server.dispatcharr),
-      h('dt', {}, 'Strömläge'), h('dd', {}, d.server.streamMode),
-      h('dt', {}, 'Minne'), h('dd', {}, fmtSize(d.server.rss)),
+    fill(server, h('h3', {}, 'Server'), h('dl', { class: 'kv' },
+      h('dt', {}, 'Version'), h('dd', {}, d.server.version),
+      h('dt', {}, 'Up for'), h('dd', {}, fmtUptime(d.server.uptime)),
+      h('dt', {}, 'Memory'), h('dd', {}, fmtSize(d.server.rss)),
       h('dt', {}, 'Node'), h('dd', {}, d.server.node),
-      d.cache && h('dt', {}, 'Delad film'), d.cache && h('dd', {}, `${fmtSize(d.cache.downloaded)}${d.cache.size ? ` av ${fmtSize(d.cache.size)}` : ''}${d.cache.complete ? ' (klar)' : ''}`),
-      h('dt', {}, 'Favoriter'), h('dd', {}, d.counts.favorites),
-      h('dt', {}, 'Påminnelser'), h('dd', {}, d.counts.reminders),
-      h('dt', {}, 'Historik'), h('dd', {}, d.counts.history)));
+      h('dt', {}, 'Favourites'), h('dd', {}, d.counts.favorites),
+      h('dt', {}, 'Reminders'), h('dd', {}, d.counts.reminders),
+      h('dt', {}, 'History'), h('dd', {}, d.counts.history)));
 
-    const e = d.epg;
-    fill(epg, h('h3', {}, 'Tablå', h('span', { class: 'grow' }), h('button', { class: 'btn small', onclick: () => go('guide') }, 'Visa')),
-      !e.enabled ? h('p', { class: 'empty' }, 'Ingen sammanslagen tablå (originaltablå saknas i inställningarna).') : h('dl', { class: 'kv' },
-        h('dt', {}, 'Byggd'), h('dd', {}, e.building ? 'Bygger nu…' : fmtAgo(e.builtAt)),
-        e.stats && h('dt', {}, 'Ifyllda program'), e.stats && h('dd', {}, e.stats.addedProgrammes.toLocaleString('sv-SE')),
-        e.stats && h('dt', {}, 'Matchade kanaler'), e.stats && h('dd', {}, e.stats.matchedChannels),
-        e.error && h('dt', {}, 'Fel'), e.error && h('dd', { class: 'error' }, e.error)));
-
-    fill(plug, h('h3', {}, 'Plugins', h('span', { class: 'grow' }), h('button', { class: 'btn small', onclick: () => go('plugins') }, 'Hantera')),
+    fill(plug, h('h3', {}, 'Plugins', h('span', { class: 'grow' }), h('button', { class: 'btn small', onclick: () => go('plugins') }, 'Manage')),
       d.plugins.length ? h('div', { class: 'chips' }, d.plugins.map((p) => h('span', { class: `pill ${p.error ? 'bad' : p.enabled ? 'ok' : ''}` }, h('span', { class: 'dot' }), p.name)))
-        : h('p', { class: 'empty' }, 'Inga plugins installerade.'));
+        : h('p', { class: 'empty' }, 'No plugins installed.'));
   };
   await update();
   timers.push(setInterval(run(update), 2000));
 }
 
-// ---------------------------------------------------------------- inställningar
+// ---------------------------------------------------------------- settings
+
+/** An input for a setting (server or plugin): text | secret | number | bool | select. */
+function settingField(idPrefix, s, inputs) {
+  const id = `${idPrefix}-${s.key}`;
+  let input;
+  if (s.type === 'bool') {
+    const cb = h('input', { type: 'checkbox', id, checked: Boolean(s.value) });
+    input = h('label', { class: 'switch' }, cb, h('span', {}));
+    inputs[s.key] = () => cb.checked;
+  } else if (s.type === 'select') {
+    const opts = (s.options || []).map((o) => (typeof o === 'object' ? o : { value: o, label: o }));
+    const sel = h('select', { id }, opts.map((o) => h('option', { value: o.value, selected: String(o.value) === String(s.value) }, o.label)));
+    input = sel;
+    inputs[s.key] = () => sel.value;
+  } else {
+    const el = h('input', {
+      id, type: s.type === 'secret' ? 'password' : s.type === 'number' ? 'number' : 'text',
+      value: s.type === 'secret' ? '' : s.value ?? '', min: s.min, max: s.max, autocomplete: 'off', spellcheck: 'false',
+      placeholder: s.type === 'secret' ? (s.isSet ? '•••••••• (set – leave empty to keep)' : 'Not set') : s.placeholder || '',
+    });
+    input = el;
+    inputs[s.key] = () => el.value;
+  }
+  return h('div', { class: 'field' }, h('label', { for: id }, s.label || s.key), input, s.help && h('div', { class: 'help' }, s.help));
+}
 
 async function renderSettings(main) {
   const d = await api('/settings');
   const inputs = {};
-  const groups = d.groups.map((g) => {
-    const fields = d.settings.filter((s) => s.group === g.key).map((s) => {
-      const id = `s-${s.key}`;
-      let input;
-      if (s.type === 'bool') {
-        const cb = h('input', { type: 'checkbox', id, checked: Boolean(s.value) });
-        input = h('label', { class: 'switch' }, cb, h('span', {}));
-        inputs[s.key] = () => cb.checked;
-      } else if (s.type === 'select') {
-        const sel = h('select', { id }, s.options.map((o) => h('option', { value: o, selected: o === s.value }, o)));
-        input = sel;
-        inputs[s.key] = () => sel.value;
-      } else {
-        const el = h('input', {
-          id, type: s.type === 'secret' ? 'password' : s.type === 'number' ? 'number' : 'text',
-          value: s.type === 'secret' ? '' : s.value ?? '', min: s.min, max: s.max, autocomplete: 'off', spellcheck: 'false',
-          placeholder: s.type === 'secret' ? (s.isSet ? '•••••••• (satt – lämna tomt för att behålla)' : 'Inte satt') : '',
-        });
-        input = el;
-        inputs[s.key] = () => el.value;
-      }
-      return h('div', { class: 'field' },
-        h('label', { for: id }, s.sv, s.fromAdmin && h('span', { class: 'tag', title: 'Ändrad i adminpanelen (gäller före .env)' }, 'ändrad')),
-        input,
-        s.help_sv && h('div', { class: 'help' }, s.help_sv));
-    });
-    return [h('div', { class: 'group-title' }, g.sv), h('section', { class: 'card form' }, fields)];
-  });
-  const save = h('button', { class: 'btn primary', type: 'submit' }, 'Spara');
+  const groups = d.groups.map((g) => [
+    h('div', { class: 'group-title' }, g.label),
+    h('section', { class: 'card form' }, d.settings.filter((s) => s.group === g.key).map((s) => settingField('s', s, inputs))),
+  ]);
+  const save = h('button', { class: 'btn primary', type: 'submit' }, 'Save');
   const form = h('form', { onsubmit: run(async (e) => {
     e.preventDefault();
     const patch = {};
@@ -296,126 +299,16 @@ async function renderSettings(main) {
       if (s.type === 'secret') { if (v) patch[s.key] = v; continue; }
       if (String(v) !== String(s.value ?? '')) patch[s.key] = v;
     }
-    if (!Object.keys(patch).length) return toast('Inget att spara');
+    if (!Object.keys(patch).length) return toast('Nothing to save');
     save.disabled = true;
     try {
       const r = await api('/settings', { method: 'PUT', body: patch });
-      toast(r.changed.length ? `Sparat: ${r.changed.length} ändring${r.changed.length > 1 ? 'ar' : ''}. Gäller direkt.` : 'Inget ändrades');
-      if (patch.pin) toast('PIN-koden är ändrad. Alla måste skriva in den nya i sina appar.');
+      toast(r.changed.length ? `Saved ${r.changed.length} change${r.changed.length > 1 ? 's' : ''}. They apply straight away.` : 'Nothing changed');
+      if (patch.pin) toast('The PIN code is set. Everyone enters it in their app to connect.');
       go('settings');
     } finally { save.disabled = false; }
-  }) }, h('div', { class: 'form' }, groups), h('div', { class: 'savebar' }, save, h('span', { class: 'faint' }, 'Ändringar gäller direkt och sparas på servern. Det som står i .env används bara som startvärden.')));
-  fill(main, head('Inställningar', 'Serverns inställningar. Hemliga värden (lösenord, PIN, länkar med inloggning) visas aldrig.'), form);
-}
-
-// ---------------------------------------------------------------- tablå
-
-async function renderGuide(main) {
-  const render = async () => {
-    const d = await api('/overview');
-    const e = d.epg;
-    const s = e.stats;
-    const rebuild = h('button', { class: 'btn primary', disabled: !e.enabled || e.building, onclick: run(async () => {
-      rebuild.disabled = true;
-      rebuild.textContent = 'Bygger… (kan ta en minut)';
-      await api('/epg/rebuild', { method: 'POST', body: {} });
-      toast('Tablån är ombyggd');
-      render();
-    }) }, e.building ? 'Bygger…' : 'Bygg om nu');
-    fill(main,
-      head('Tablå', 'Sammanslagen tablå: originalet först, reservkällan fyller luckorna. Dispatcharr hämtar den från /epg/merged.xml.gz.', rebuild),
-      !e.enabled ? h('section', { class: 'card' }, h('p', {}, 'Ingen originaltablå är inställd. Lägg in leverantörens XMLTV-länk under ', h('a', { href: '#settings', onclick: (ev) => { ev.preventDefault(); go('settings'); } }, 'Inställningar → Tablå'), '.'))
-        : h('div', { class: 'grid' },
-          h('section', { class: 'card' }, h('h3', {}, 'Status'), h('dl', { class: 'kv' },
-            h('dt', {}, 'Byggd'), h('dd', {}, fmtAgo(e.builtAt)),
-            s && h('dt', {}, 'Länder'), s && h('dd', {}, (s.countries || []).join(', ').toUpperCase() || '–'),
-            s && h('dt', {}, 'Reservkällor'), s && h('dd', {}, s.fallbackSources ?? '–'),
-            s && h('dt', {}, 'Matchade kanaler'), s && h('dd', {}, Object.entries(s.matchedByCountry || {}).map(([k, v]) => `${k.toUpperCase()} ${v}`).join(' · ') || s.matchedChannels),
-            s && h('dt', {}, 'Ifyllda program'), s && h('dd', {}, s.addedProgrammes.toLocaleString('sv-SE')),
-            s && h('dt', {}, 'Storlek'), s && h('dd', {}, fmtSize(s.bytes)),
-            e.error && h('dt', {}, 'Fel'), e.error && h('dd', { class: 'error' }, e.error))),
-          s && h('section', { class: 'card' }, h('h3', {}, 'Kanaler som fått mest ifyllt'),
-            h('div', { class: 'table-wrap' }, h('table', {}, h('tbody', {},
-              Object.entries(s.filled || {}).slice(0, 25).map(([k, v]) => h('tr', {}, h('td', {}, h('code', {}, k)), h('td', { class: 'num' }, `${v} program`))))))),
-          !s && h('section', { class: 'card' }, h('p', { class: 'muted' }, 'Ingen statistik än – tablån har inte byggts om sedan servern startade. Klicka "Bygg om nu" för att se detaljer.'))));
-  };
-  await render();
-}
-
-// ---------------------------------------------------------------- data
-
-let dataTab = 'reminders';
-async function renderData(main) {
-  const d = await api('/data');
-  const tabs = [['reminders', 'Påminnelser', d.reminders], ['favorites', 'Favoriter', d.favorites], ['history', 'Historik', d.history]];
-  const body = h('section', { class: 'card' });
-  const remove = (kind, key) => api(`/data/${kind}/${encodeURIComponent(key)}`, { method: 'DELETE' }).then(() => renderData(main));
-  const tables = {
-    reminders: () => d.reminders.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'När'), h('th', {}, 'Program'), h('th', {}, 'Kanal'), h('th', {}, 'Tillagd av'), h('th', {}))),
-      h('tbody', {}, d.reminders.map((r) => h('tr', {}, h('td', {}, fmtDate(r.start)), h('td', {}, h('b', {}, r.title)), h('td', { class: 'muted' }, r.channel?.name), h('td', { class: 'muted' }, r.addedBy || '–'),
-        h('td', { class: 'act' }, confirmBtn('Ta bort', 'Säker?', () => remove('reminders', r.key)))))))
-      : h('p', { class: 'empty' }, 'Inga kommande påminnelser.'),
-    favorites: () => d.favorites.length ? h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Namn'), h('th', {}, 'Typ'), h('th', {}, 'Nytt'), h('th', {}, 'Tillagd av'), h('th', {}))),
-      h('tbody', {}, d.favorites.map((f) => h('tr', {}, h('td', {}, h('b', {}, f.name)), h('td', { class: 'muted' }, { series: 'Serie', movie: 'Film', live: 'Kanal' }[f.type] || f.type),
-        h('td', {}, f.newCount ? h('span', { class: 'pill warn' }, `${f.newCount} nya`) : '–'), h('td', { class: 'muted' }, f.addedBy || '–'),
-        h('td', { class: 'act' }, confirmBtn('Ta bort', 'Säker?', () => remove('favorites', f.key)))))))
-      : h('p', { class: 'empty' }, 'Inga favoriter.'),
-    history: () => d.history.length ? [h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '8px' } },
-      confirmBtn('Rensa all historik', 'Klicka igen för att rensa allt', () => api('/data/history', { method: 'DELETE' }).then(() => renderData(main)))),
-    h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Titel'), h('th', {}, 'Startad av'), h('th', {}, 'Senast'), h('th', {}, 'Position'), h('th', {}))),
-      h('tbody', {}, d.history.map((e) => h('tr', {}, h('td', {}, h('b', {}, e.title), e.subtitle && h('div', { class: 'faint' }, e.subtitle)), h('td', { class: 'muted' }, e.startedBy || '–'),
-        h('td', { class: 'faint' }, fmtAgo(e.lastAt)), h('td', { class: 'num' }, e.type === 'live' ? 'Live' : `${fmtTime(e.position)}${e.duration ? ` / ${fmtTime(e.duration)}` : ''}`),
-        h('td', { class: 'act' }, confirmBtn('Ta bort', 'Säker?', () => remove('history', e.key)))))))]
-      : h('p', { class: 'empty' }, 'Ingen historik.'),
-  };
-  const show = (t) => {
-    dataTab = t;
-    tabRow.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
-    fill(body, h('div', { class: 'table-wrap' }, tables[t]()));
-  };
-  const tabRow = h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([id, label, list]) => h('button', { class: 'tab', 'data-t': id, role: 'tab', onclick: () => show(id) }, label, h('span', { class: 'count' }, list.length))));
-  fill(main, head('Påminnelser och data', 'Rummets gemensamma påminnelser, favoriter och historik.'), tabRow, body);
-  show(dataTab);
-}
-
-// ---------------------------------------------------------------- nedladdningar
-
-async function renderDownloads(main) {
-  let files = await api('/downloads');
-  const list = h('section', { class: 'card' });
-  const progress = h('div', { class: 'progress faint' });
-  const picker = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => upload([...picker.files]) });
-  const drop = h('div', { class: 'drop', tabindex: '0', role: 'button', onclick: () => picker.click(), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); } } },
-    h('b', {}, 'Släpp filer här'), ' eller klicka för att välja', h('div', { class: 'faint', style: { marginTop: '4px' } }, 'T.ex. Couchmates-Windows.zip, appens APK eller Apple TV-filen (.ipa)'));
-  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
-  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
-  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); upload([...e.dataTransfer.files]); });
-
-  async function upload(list) {
-    for (const f of list) {
-      const name = f.name.replace(/[^A-Za-z0-9._ -]+/g, '-');
-      progress.textContent = `Laddar upp ${name} (${fmtSize(f.size)})…`;
-      try {
-        files = await api(`/downloads/${encodeURIComponent(name)}`, { method: 'PUT', raw: f });
-        toast(`${name} uppladdad`);
-      } catch (e) { toast(`${name}: ${e.message}`, true); }
-    }
-    progress.textContent = '';
-    renderList();
-  }
-  function renderList() {
-    fill(list, h('h3', {}, `Filer  ${files.length}`, h('span', { class: 'grow' }), h('a', { class: 'btn small', href: '/download', target: '_blank', rel: 'noopener' }, 'Öppna nedladdningssidan ↗')),
-      files.length ? h('div', { class: 'table-wrap' }, h('table', {}, h('thead', {}, h('tr', {}, h('th', {}, 'Fil'), h('th', {}, 'Beskrivning'), h('th', {}, 'Storlek'), h('th', {}, 'Uppladdad'), h('th', {}))),
-        h('tbody', {}, files.map((f) => {
-          const desc = h('input', { type: 'text', value: f.description, placeholder: 'Visas på nedladdningssidan', 'aria-label': `Beskrivning för ${f.name}` });
-          desc.addEventListener('change', run(async () => { files = await api(`/downloads/${encodeURIComponent(f.name)}`, { method: 'PATCH', body: { description: desc.value } }); toast('Beskrivningen sparad'); }));
-          return h('tr', {}, h('td', {}, h('a', { href: `/download/${encodeURIComponent(f.name)}` }, f.name)), h('td', {}, desc), h('td', { class: 'num' }, fmtSize(f.size)), h('td', { class: 'faint' }, fmtAgo(f.modified)),
-            h('td', { class: 'act' }, confirmBtn('Ta bort', 'Säker?', async () => { files = await api(`/downloads/${encodeURIComponent(f.name)}`, { method: 'DELETE' }); renderList(); })));
-        })))) : h('p', { class: 'empty' }, 'Inga filer uppladdade än.'));
-  }
-  fill(main, head('Nedladdningar', 'Filer som kompisarna kan ladda ner på /download. Sidan visar också hur man ansluter (men aldrig PIN-koden).'),
-    h('div', { class: 'grid' }, h('section', { class: 'card wide' }, drop, picker, progress), h('div', { class: 'wide' }, list)));
-  renderList();
+  }) }, h('div', { class: 'form' }, groups), h('div', { class: 'savebar' }, save, h('span', { class: 'faint' }, 'Changes apply straight away and are saved on the server.')));
+  fill(main, head('Settings', 'The server\'s own settings. Each plugin has its own settings under Plugins. Secret values are never shown.'), form);
 }
 
 // ---------------------------------------------------------------- plugins
@@ -423,25 +316,21 @@ async function renderDownloads(main) {
 async function renderPlugins(main) {
   let d = await api('/plugins');
   const listEl = h('div', { class: 'grid' });
-  const picker = h('input', { type: 'file', accept: '.zip,.mjs,.js', hidden: true, onchange: run(async () => {
+  const bundledEl = h('div', { class: 'bundled-list' });
+  const picker = h('input', { type: 'file', accept: '.zip', hidden: true, onchange: run(async () => {
     const f = picker.files[0];
     if (!f) return;
-    d = { ...d, ...(await api(`/plugins/upload?name=${encodeURIComponent(f.name)}`, { method: 'PUT', raw: f })) };
-    toast(`${f.name} installerat – slå på det nedan`);
     picker.value = '';
+    d = await api(`/plugins/upload?name=${encodeURIComponent(f.name)}`, { method: 'PUT', raw: f });
+    toast(`${f.name} installed – switch it on below`);
     renderList();
   }) });
-  const examples = h('div', { class: 'row' }, d.examples.length ? d.examples.map((f) => h('button', { class: 'btn small', onclick: run(async () => {
-    d = { ...d, ...(await api('/plugins/example', { method: 'POST', body: { file: f } })) };
-    toast(`${f} installerat – slå på det nedan`);
-    renderList();
-  }) }, `+ ${f.replace('.mjs', '')}`)) : h('span', { class: 'faint' }, 'Inga exempel'));
 
   function pluginCard(p) {
-    const toggle = h('input', { type: 'checkbox', checked: p.enabled, 'aria-label': `Slå på ${p.name}` });
+    const toggle = h('input', { type: 'checkbox', checked: p.enabled, 'aria-label': `Switch on ${p.name}` });
     toggle.addEventListener('change', run(async () => {
-      d = { ...d, ...(await api(`/plugins/${p.id}/${toggle.checked ? 'enable' : 'disable'}`, { method: 'POST', body: {} })) };
-      toast(`${p.name} ${toggle.checked ? 'påslagen' : 'avstängd'}`);
+      d = await api(`/plugins/${p.id}/${toggle.checked ? 'enable' : 'disable'}`, { method: 'POST', body: {} });
+      toast(`${p.name} switched ${toggle.checked ? 'on' : 'off'}`);
       renderList();
     }));
     const inputs = {};
@@ -449,71 +338,155 @@ async function renderPlugins(main) {
       e.preventDefault();
       const body = {};
       for (const s of p.settings) { const v = inputs[s.key](); if (s.type === 'secret' && !v) continue; body[s.key] = v; }
-      d = { ...d, ...(await api(`/plugins/${p.id}/settings`, { method: 'PUT', body })) };
-      toast('Inställningarna sparade');
+      d = await api(`/plugins/${p.id}/settings`, { method: 'PUT', body });
+      toast('Settings saved');
       renderList();
-    }) }, p.settings.map((s) => {
-      const id = `p-${p.id}-${s.key}`;
-      let input;
-      if (s.type === 'bool') { const cb = h('input', { type: 'checkbox', id, checked: Boolean(s.value) }); input = h('label', { class: 'switch' }, cb, h('span', {})); inputs[s.key] = () => cb.checked; }
-      else { const el = h('input', { id, type: s.type === 'secret' ? 'password' : s.type === 'number' ? 'number' : 'text', value: s.type === 'secret' ? '' : s.value ?? '', autocomplete: 'off', placeholder: s.type === 'secret' ? (s.isSet ? '•••••••• (satt)' : 'Inte satt') : '' }); input = el; inputs[s.key] = () => el.value; }
-      return h('div', { class: 'field' }, h('label', { for: id }, s.label || s.key), input, s.help && h('div', { class: 'help' }, s.help));
-    }), h('div', {}, h('button', { class: 'btn primary small', type: 'submit' }, 'Spara inställningar'))) : null;
+    }) }, p.settings.map((s) => settingField(`p-${p.id}`, s, inputs)), h('div', {}, h('button', { class: 'btn primary small', type: 'submit' }, 'Save settings'))) : null;
+    const missing = p.settings.some((s) => s.required && (s.type === 'secret' ? !s.isSet : !s.value));
     return h('section', { class: 'card plugin' },
       h('div', { class: 'top' },
-        h('div', { class: 'grow' }, h('div', { class: 'name' }, p.name, p.version && h('span', { class: 'faint', style: { fontWeight: 400, fontSize: '13px' } }, `  v${p.version}`)),
-          h('div', { class: 'meta' }, h('code', {}, p.kind === 'zip' ? `${p.id}/ (zip)` : `${p.id}.mjs`), p.source && h('span', { class: 'pill ok', style: { marginLeft: '8px' } }, `i appens meny: ${p.source.name}`)),
+        h('div', { class: 'grow' },
+          h('div', { class: 'name' }, p.name, p.version && h('span', { class: 'faint', style: { fontWeight: 400, fontSize: '13px' } }, `  v${p.version}`)),
+          h('div', { class: 'meta' }, h('code', {}, p.id), p.menu.map((m) => h('span', { class: 'pill ok', style: { marginLeft: '8px' } }, `in the app menu: ${m}`))),
           p.description && h('p', { class: 'muted', style: { margin: '6px 0 0' } }, p.description),
-          p.requires && h('p', { class: 'faint', style: { margin: '4px 0 0', fontSize: '13px' } }, `Kräver: ${p.requires}`),
-          p.homepage && h('a', { href: p.homepage, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, 'Läs mer ↗')),
+          p.requires && h('p', { class: 'faint', style: { margin: '4px 0 0', fontSize: '13px' } }, `Requires: ${p.requires}`),
+          (p.homepage || p.links.length) ? h('div', { class: 'row', style: { marginTop: '6px', gap: '14px' } },
+            p.homepage && h('a', { href: p.homepage, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, 'Read more ↗'),
+            p.links.map((l) => h('a', { href: l.url, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, `${l.label} ↗`))) : null),
         h('label', { class: 'switch' }, toggle, h('span', {}))),
-      p.error && h('p', { class: 'error', style: { margin: 0 } }, `Fel: ${p.error}`),
-      p.enabled && (p.events.length || p.routes.length) ? h('div', { class: 'chips' },
-        p.events.map((e) => h('span', { class: 'pill' }, `lyssnar: ${e}`)),
-        p.routes.map((r) => { const path = r.split(' ')[1]; return r.startsWith('GET') ? h('a', { class: 'pill ok', href: path, target: '_blank', rel: 'noopener' }, `${path} ↗`) : h('span', { class: 'pill' }, r); })) : null,
-      settingsForm && h('details', { open: p.enabled && p.settings.some((s) => s.type === 'secret' ? !s.isSet : false) }, h('summary', {}, 'Inställningar'), h('div', { style: { marginTop: '12px' } }, settingsForm)),
-      h('div', { class: 'row' }, confirmBtn('Ta bort plugin', 'Klicka igen för att ta bort', async () => { d = { ...d, ...(await api(`/plugins/${p.id}`, { method: 'DELETE' })) }; toast(`${p.name} borttaget`); renderList(); })));
+      p.error && h('p', { class: 'error', style: { margin: 0 } }, `Error: ${p.error}`),
+      missing && h('p', { class: 'notice', style: { margin: 0 } }, 'Fill in the settings below before using this plugin.'),
+      settingsForm && h('details', { open: missing }, h('summary', {}, 'Settings'), h('div', { style: { marginTop: '12px' } }, settingsForm)),
+      h('div', { class: 'row' }, confirmBtn('Remove plugin', 'Click again to remove', async () => {
+        d = await api(`/plugins/${p.id}`, { method: 'DELETE' });
+        toast(`${p.name} removed`);
+        renderList();
+      })));
   }
-  function renderList() {
-    fill(listEl, d.plugins.length ? d.plugins.map(pluginCard) : h('p', { class: 'empty' }, 'Inga plugins installerade än. Installera ett exempel ovan eller ladda upp en egen .mjs-fil.'));
-  }
-  fill(main,
-    head('Plugins', 'Utöka servern med egna funktioner. Ett plugin är en zip-fil (eller en enskild .mjs-fil) som kan lägga till källor i appens meny, reagera på händelser, lägga till egna sidor och ha egna inställningar.',
-      h('button', { class: 'btn primary', onclick: () => picker.click() }, 'Ladda upp plugin (.zip eller .mjs)'), picker),
-    h('p', { class: 'notice' }, h('b', {}, 'Bra att veta: '), 'plugins körs med samma rättigheter som servern. Installera bara plugins som du själv har skrivit eller litar på. Nya plugins är avstängda tills du slår på dem.'),
-    h('section', { class: 'card', style: { margin: '16px 0' } }, h('h3', {}, 'Exempel att utgå från'), examples,
-      h('details', { style: { marginTop: '12px' } }, h('summary', {}, 'Hur skriver man ett plugin?'), h('pre', { class: 'log', style: { height: 'auto', minHeight: 0, marginTop: '10px' } },
-`export const meta = {
-  name: 'Mitt plugin', version: '1.0', description: 'Vad det gör',
-  settings: [{ key: 'url', label: 'Adress', type: 'text' }],   // text | secret | number | bool
-};
 
-export default function setup(api) {
-  // Händelser: load, play, pause, seek, stop, member_join, member_leave, reminder, state
-  api.on('load', ({ media, by }) => api.log(by + ' startade ' + media.title));
-  // Egen sida: /plugins/<filnamn>/hej
-  api.route('GET', '/hej', (req, res) => res.end('Hej!'));
-  // Styr rummet: api.room.state(), members(), load(media), play(), pause(), seek(s), stop(), notify(text)
-  // Inställningar: api.settings.url
-  return () => { /* körs när pluginet stängs av */ };
-}`))),
+  function renderList() {
+    fill(bundledEl, d.bundled.length ? d.bundled.map((b) => {
+      const update = b.installed && b.installedVersion !== b.version;
+      return h('div', { class: 'bundled' },
+        h('div', { class: 'grow' },
+          h('div', {}, h('b', {}, b.name), h('span', { class: 'faint' }, `  v${b.version}`)),
+          h('div', { class: 'faint', style: { fontSize: '13px' } }, b.description)),
+        b.installed && !update ? h('span', { class: 'pill ok' }, 'Installed')
+          : h('button', { class: 'btn small primary', onclick: run(async () => {
+            d = await api(`/plugins/bundled/${b.id}`, { method: 'POST', body: {} });
+            toast(update ? `${b.name} updated` : `${b.name} installed – switch it on below`);
+            renderList();
+          }) }, update ? `Update to v${b.version}` : 'Install'));
+    }) : h('span', { class: 'faint' }, 'None'));
+    fill(listEl, d.plugins.length ? d.plugins.map(pluginCard) : h('p', { class: 'empty' }, 'No plugins installed yet. Install one that ships with the server above, or upload your own.'));
+  }
+
+  fill(main,
+    head('Plugins', 'Plugins decide what the apps show: the menu, the screens, search results, what is played and how the player behaves. Each plugin has its own settings.',
+      h('button', { class: 'btn primary', onclick: () => picker.click() }, 'Upload plugin (.zip)'), picker),
+    h('p', { class: 'notice' }, h('b', {}, 'Good to know: '), 'plugins run with the same rights as the server. Only install plugins you wrote yourself or trust. New plugins are switched off until you switch them on.'),
+    h('section', { class: 'card', style: { margin: '16px 0' } }, h('h3', {}, 'Ships with the server'), bundledEl),
     listEl);
   renderList();
 }
 
-// ---------------------------------------------------------------- logg
+// ---------------------------------------------------------------- data
+
+let dataTab = 'reminders';
+async function renderData(main) {
+  const d = await api('/data');
+  const tabs = [['reminders', 'Reminders', d.reminders], ['favorites', 'Favourites', d.favorites], ['history', 'History', d.history]];
+  const body = h('section', { class: 'card' });
+  const remove = (kind, key) => api(`/data/${kind}/${encodeURIComponent(key)}`, { method: 'DELETE' }).then(() => renderData(main));
+  const tables = {
+    reminders: () => d.reminders.length ? h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'When'), h('th', {}, 'Programme'), h('th', {}, 'Channel'), h('th', {}, 'Plugin'), h('th', {}, 'Added by'), h('th', {}))),
+      h('tbody', {}, d.reminders.map((r) => h('tr', {},
+        h('td', {}, fmtDate(r.start)), h('td', {}, h('b', {}, r.title)), h('td', { class: 'muted' }, r.channel?.title), h('td', { class: 'muted' }, r.plugin), h('td', { class: 'muted' }, r.addedBy || '–'),
+        h('td', { class: 'act' }, confirmBtn('Remove', 'Sure?', () => remove('reminders', r.key)))))))
+      : h('p', { class: 'empty' }, 'No upcoming reminders.'),
+    favorites: () => d.favorites.length ? h('table', {},
+      h('thead', {}, h('tr', {}, h('th', {}, 'Title'), h('th', {}, 'Kind'), h('th', {}, 'Plugin'), h('th', {}, 'New'), h('th', {}, 'Added by'), h('th', {}))),
+      h('tbody', {}, d.favorites.map((f) => h('tr', {},
+        h('td', {}, h('b', {}, f.title)), h('td', { class: 'muted' }, f.kind || '–'), h('td', { class: 'muted' }, f.plugin),
+        h('td', {}, f.newCount ? h('span', { class: 'pill warn' }, `${f.newCount} new`) : '–'), h('td', { class: 'muted' }, f.addedBy || '–'),
+        h('td', { class: 'act' }, confirmBtn('Remove', 'Sure?', () => remove('favorites', f.key)))))))
+      : h('p', { class: 'empty' }, 'No favourites.'),
+    history: () => d.history.length ? [
+      h('div', { class: 'row', style: { justifyContent: 'flex-end', marginBottom: '8px' } },
+        confirmBtn('Clear all history', 'Click again to clear everything', () => api('/data/history', { method: 'DELETE' }).then(() => renderData(main)))),
+      h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'Title'), h('th', {}, 'Plugin'), h('th', {}, 'Started by'), h('th', {}, 'Last'), h('th', {}, 'Position'), h('th', {}))),
+        h('tbody', {}, d.history.map((e) => h('tr', {},
+          h('td', {}, h('b', {}, e.title), e.subtitle && h('div', { class: 'faint' }, e.subtitle)), h('td', { class: 'muted' }, e.plugin), h('td', { class: 'muted' }, e.startedBy || '–'),
+          h('td', { class: 'faint' }, fmtAgo(e.lastAt)), h('td', { class: 'num' }, e.live ? 'Live' : `${fmtTime(e.position)}${e.duration ? ` / ${fmtTime(e.duration)}` : ''}`),
+          h('td', { class: 'act' }, confirmBtn('Remove', 'Sure?', () => remove('history', e.key)))))))]
+      : h('p', { class: 'empty' }, 'No history.'),
+  };
+  const show = (t) => {
+    dataTab = t;
+    tabRow.querySelectorAll('.tab').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+    fill(body, h('div', { class: 'table-wrap' }, tables[t]()));
+  };
+  const tabRow = h('div', { class: 'tabs', role: 'tablist' }, tabs.map(([id, label, list]) => h('button', { class: 'tab', 'data-t': id, role: 'tab', onclick: () => show(id) }, label, h('span', { class: 'count' }, list.length))));
+  fill(main, head('Reminders and data', 'The room\'s shared reminders, favourites and history.'), tabRow, body);
+  show(dataTab);
+}
+
+// ---------------------------------------------------------------- downloads
+
+async function renderDownloads(main) {
+  let files = await api('/downloads');
+  const list = h('section', { class: 'card' });
+  const progress = h('div', { class: 'progress faint' });
+  const picker = h('input', { type: 'file', multiple: true, hidden: true, onchange: () => upload([...picker.files]) });
+  const drop = h('div', { class: 'drop', tabindex: '0', role: 'button', onclick: () => picker.click(), onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); picker.click(); } } },
+    h('b', {}, 'Drop files here'), ' or click to choose', h('div', { class: 'faint', style: { marginTop: '4px' } }, 'E.g. the Android TV app (Couchmate.apk)'));
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); drop.classList.remove('over'); upload([...e.dataTransfer.files]); });
+
+  async function upload(chosen) {
+    for (const f of chosen) {
+      const name = f.name.replace(/[^A-Za-z0-9._ -]+/g, '-');
+      progress.textContent = `Uploading ${name} (${fmtSize(f.size)})…`;
+      try {
+        files = await api(`/downloads/${encodeURIComponent(name)}`, { method: 'PUT', raw: f });
+        toast(`${name} uploaded`);
+      } catch (e) { toast(`${name}: ${e.message}`, true); }
+    }
+    progress.textContent = '';
+    renderList();
+  }
+  function renderList() {
+    fill(list, h('h3', {}, `Files  ${files.length}`, h('span', { class: 'grow' }), h('a', { class: 'btn small', href: '/download', target: '_blank', rel: 'noopener' }, 'Open the download page ↗')),
+      files.length ? h('div', { class: 'table-wrap' }, h('table', {},
+        h('thead', {}, h('tr', {}, h('th', {}, 'File'), h('th', {}, 'Description'), h('th', {}, 'Size'), h('th', {}, 'Uploaded'), h('th', {}))),
+        h('tbody', {}, files.map((f) => {
+          const desc = h('input', { type: 'text', value: f.description, placeholder: 'Shown on the download page', 'aria-label': `Description for ${f.name}` });
+          desc.addEventListener('change', run(async () => { files = await api(`/downloads/${encodeURIComponent(f.name)}`, { method: 'PATCH', body: { description: desc.value } }); toast('Description saved'); }));
+          return h('tr', {}, h('td', {}, h('a', { href: `/download/${encodeURIComponent(f.name)}` }, f.name)), h('td', {}, desc), h('td', { class: 'num' }, fmtSize(f.size)), h('td', { class: 'faint' }, fmtAgo(f.modified)),
+            h('td', { class: 'act' }, confirmBtn('Remove', 'Sure?', async () => { files = await api(`/downloads/${encodeURIComponent(f.name)}`, { method: 'DELETE' }); renderList(); })));
+        })))) : h('p', { class: 'empty' }, 'No files uploaded yet.'));
+  }
+  fill(main, head('Downloads', 'Files your friends can download at /download. The page also shows how to connect (but never the PIN code).'),
+    h('div', { class: 'grid' }, h('section', { class: 'card wide' }, drop, picker, progress), h('div', { class: 'wide' }, list)));
+  renderList();
+}
+
+// ---------------------------------------------------------------- log
 
 async function renderLogs(main) {
   const box = h('div', { class: 'log', role: 'log', 'aria-live': 'off' });
-  const filter = h('input', { type: 'text', placeholder: 'Filtrera, t.ex. "påminnelse" eller ett namn', style: { maxWidth: '340px' }, 'aria-label': 'Filtrera loggen' });
-  const level = h('select', { 'aria-label': 'Nivå', style: { width: 'auto' } }, h('option', { value: '' }, 'Alla nivåer'), h('option', { value: 'warn' }, 'Varningar och fel'), h('option', { value: 'error' }, 'Bara fel'));
+  const filter = h('input', { type: 'text', placeholder: 'Filter, e.g. "reminders" or a name', style: { maxWidth: '340px' }, 'aria-label': 'Filter the log' });
+  const level = h('select', { 'aria-label': 'Level', style: { width: 'auto' } }, h('option', { value: '' }, 'All levels'), h('option', { value: 'warn' }, 'Warnings and errors'), h('option', { value: 'error' }, 'Errors only'));
   let lines = [];
   const matches = (l) => (!level.value || (level.value === 'warn' ? l.level !== 'log' : l.level === 'error')) && (!filter.value || l.text.toLowerCase().includes(filter.value.toLowerCase()));
-  const row = (l) => h('div', { class: `l lv-${l.level}` }, h('span', { class: 't' }, new Date(l.t).toLocaleTimeString('sv-SE')), h('span', {}, l.text));
+  const row = (l) => h('div', { class: `l lv-${l.level}` }, h('span', { class: 't' }, new Date(l.t).toLocaleTimeString()), h('span', {}, l.text));
   const redraw = () => { fill(box, lines.filter(matches).map(row)); box.scrollTop = box.scrollHeight; };
   filter.addEventListener('input', redraw);
   level.addEventListener('change', redraw);
-  fill(main, head('Logg', 'Serverns logg i realtid. PIN-kod och lösenord tas bort innan något visas.', h('div', { class: 'row' }, level, filter)), box);
+  fill(main, head('Log', 'The server log in real time. PIN codes and passwords are removed before anything is shown.', h('div', { class: 'row' }, level, filter)), box);
   lines = await api('/logs');
   redraw();
   const es = new EventSource('/admin/api/logs/stream');
@@ -529,28 +502,28 @@ async function renderLogs(main) {
   timers.push(() => es.close());
 }
 
-// ---------------------------------------------------------------- konto
+// ---------------------------------------------------------------- account
 
 function renderAccount(main) {
   const cur = h('input', { type: 'password', id: 'cur', autocomplete: 'current-password' });
-  const pw = h('input', { type: 'password', id: 'npw', autocomplete: 'new-password', placeholder: 'Minst 8 tecken' });
+  const pw = h('input', { type: 'password', id: 'npw', autocomplete: 'new-password', placeholder: 'At least 8 characters' });
   const pw2 = h('input', { type: 'password', id: 'npw2', autocomplete: 'new-password' });
-  fill(main, head('Konto', 'Adminlösenordet skyddar den här panelen. Det är inte samma som rummets PIN-kod.'),
+  fill(main, head('Account', 'The admin password protects this panel. It is not the same as the PIN code the apps use.'),
     h('div', { class: 'grid' },
-      h('section', { class: 'card' }, h('h3', {}, 'Byt lösenord'),
+      h('section', { class: 'card' }, h('h3', {}, 'Change password'),
         h('form', { class: 'form', onsubmit: run(async (e) => {
           e.preventDefault();
-          if (pw.value !== pw2.value) throw new Error('Lösenorden är inte likadana');
+          if (pw.value !== pw2.value) throw new Error('The passwords do not match');
           await api('/password', { method: 'POST', body: { current: cur.value, password: pw.value } });
           cur.value = pw.value = pw2.value = '';
-          toast('Lösenordet är bytt. Andra inloggningar har loggats ut.');
+          toast('Password changed. Other sessions have been logged out.');
         }) },
-        h('div', { class: 'field' }, h('label', { for: 'cur' }, 'Nuvarande'), cur),
-        h('div', { class: 'field' }, h('label', { for: 'npw' }, 'Nytt'), pw),
-        h('div', { class: 'field' }, h('label', { for: 'npw2' }, 'Upprepa'), pw2),
-        h('div', {}, h('button', { class: 'btn primary', type: 'submit' }, 'Byt lösenord')))),
-      h('section', { class: 'card' }, h('h3', {}, 'Logga ut'), h('p', { class: 'muted' }, 'Inloggningen gäller i en vecka på den här enheten.'),
-        h('button', { class: 'btn', onclick: run(async () => { await api('/logout', { method: 'POST', body: {} }); start(); }) }, 'Logga ut'))));
+        h('div', { class: 'field' }, h('label', { for: 'cur' }, 'Current'), cur),
+        h('div', { class: 'field' }, h('label', { for: 'npw' }, 'New'), pw),
+        h('div', { class: 'field' }, h('label', { for: 'npw2' }, 'Repeat'), pw2),
+        h('div', {}, h('button', { class: 'btn primary', type: 'submit' }, 'Change password')))),
+      h('section', { class: 'card' }, h('h3', {}, 'Log out'), h('p', { class: 'muted' }, 'A login lasts a week on this device.'),
+        h('button', { class: 'btn', onclick: run(async () => { await api('/logout', { method: 'POST', body: {} }); start(); }) }, 'Log out'))));
 }
 
 start();

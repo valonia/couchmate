@@ -1,40 +1,31 @@
-// Gemensamma favoriter för rummet (serier, filmer, kanaler).
-// För serier håller vi koll på vilka avsnitt som fanns när de lades till, så att nya avsnitt kan markeras.
+// Shared favourites for the room, from any plugin.
+// When the plugin can list an item's episodes (source.episodes), the server remembers which ones
+// existed when it was added, so that new episodes can be flagged.
 
-import fs from 'node:fs';
-import path from 'node:path';
-
-const TYPES = ['series', 'movie', 'live'];
+import { JsonFile } from './util.js';
+import { refKey } from './history.js';
 
 export class Favorites {
   constructor(file, { log = console.log } = {}) {
-    this.file = file;
     this.log = log;
-    this.entries = [];
-    this.saveTimer = null;
-    try {
-      const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (Array.isArray(data)) this.entries = data;
-    } catch {
-      // inga favoriter än
-    }
+    this.store = new JsonFile(file, [], { delay: 1000 });
+    this.store.data = this.store.data.filter((e) => e && e.plugin && e.id);
   }
 
-  static key(type, id) {
-    return `${type}:${id}`;
-  }
+  get entries() { return this.store.data; }
 
-  /** Det klienterna får se (utan interna listor över sedda avsnitt). */
+  /** What the apps see (without the internal lists of seen episodes). */
   list() {
     return this.entries.map((e) => ({
       key: e.key,
-      type: e.type,
+      plugin: e.plugin,
       id: e.id,
-      name: e.name,
-      icon: e.icon,
-      ext: e.ext,
-      categoryId: e.categoryId,
-      categoryName: e.categoryName,
+      kind: e.kind,
+      title: e.title,
+      subtitle: e.subtitle,
+      image: e.image,
+      live: e.live,
+      action: e.action,
       addedBy: e.addedBy,
       addedAt: e.addedAt,
       newCount: e.newEpisodes?.length || 0,
@@ -42,102 +33,86 @@ export class Favorites {
     }));
   }
 
-  get(key) {
-    return this.entries.find((e) => e.key === key);
-  }
+  get(key) { return this.entries.find((e) => e.key === key); }
 
   add(item, by) {
-    if (!TYPES.includes(item.type)) return null;
-    const key = Favorites.key(item.type, item.id);
+    const key = refKey(item.plugin, item.id);
     if (this.get(key)) return null;
     const entry = {
       key,
-      type: item.type,
+      plugin: item.plugin,
       id: item.id,
-      name: item.name,
-      icon: item.icon || null,
-      ext: item.ext || '',
-      categoryId: item.categoryId || null,
-      categoryName: item.categoryName || null,
-      addedBy: by,
+      kind: item.kind || null,
+      title: item.title,
+      subtitle: item.subtitle || null,
+      image: item.image || null,
+      live: Boolean(item.live),
+      action: item.action === 'open' ? 'open' : 'play',
+      addedBy: by || null,
       addedAt: Date.now(),
-      // serier: fylls i vid första kontrollen (allt som finns då räknas som "sett")
-      initialized: item.type !== 'series',
+      initialized: false, // the first episode check counts everything that exists as "seen"
       seen: [],
       newEpisodes: [],
     };
     this.entries.unshift(entry);
-    this.save();
+    this.store.save();
     return entry;
   }
 
   remove(key) {
     const before = this.entries.length;
-    this.entries = this.entries.filter((e) => e.key !== key);
-    if (this.entries.length !== before) this.save();
-    return this.entries.length !== before;
+    this.store.data = this.entries.filter((e) => e.key !== key);
+    if (this.entries.length === before) return false;
+    this.store.save();
+    return true;
   }
 
-  /** Någon öppnade serien – alla nya avsnitt räknas som sedda. */
+  removePlugin(plugin) {
+    this.store.data = this.entries.filter((e) => e.plugin !== plugin);
+    this.store.save();
+  }
+
+  /** Someone opened the item – all new episodes count as seen. */
   markSeen(key) {
     const e = this.get(key);
-    if (!e || !e.newEpisodes?.length) return false;
+    if (!e?.newEpisodes?.length) return false;
     e.seen.push(...e.newEpisodes.map((n) => n.id));
     e.newEpisodes = [];
-    this.save();
+    this.store.save();
     return true;
   }
 
-  /** Någon tittade på ett avsnitt – det är inte nytt längre. */
-  markEpisodeSeen(seriesId, episodeId) {
-    const e = this.get(Favorites.key('series', seriesId));
-    if (!e) return false;
-    const had = e.newEpisodes?.some((n) => n.id === episodeId);
-    if (!had) return false;
-    e.newEpisodes = e.newEpisodes.filter((n) => n.id !== episodeId);
-    e.seen.push(episodeId);
-    this.save();
-    return true;
+  /** Someone watched an episode – it is no longer new, in whichever favourite lists it. */
+  markEpisodeSeen(plugin, episodeId) {
+    let changed = false;
+    for (const e of this.entries) {
+      if (e.plugin !== plugin || !e.newEpisodes?.some((n) => n.id === episodeId)) continue;
+      e.newEpisodes = e.newEpisodes.filter((n) => n.id !== episodeId);
+      e.seen.push(episodeId);
+      changed = true;
+    }
+    if (changed) this.store.save();
+    return changed;
   }
 
-  /**
-   * Uppdatera en serie med dess nuvarande avsnitt ([{id, label}]).
-   * Returnerar true om något ändrades (nya avsnitt hittades).
-   */
+  /** Updates an item with its current episodes ([{ id, label }]). Returns true if new ones were found. */
   updateEpisodes(key, episodes) {
     const e = this.get(key);
     if (!e) return false;
     if (!e.initialized) {
       e.seen = episodes.map((x) => x.id);
       e.initialized = true;
-      this.save();
+      this.store.save();
       return false;
     }
     const known = new Set([...e.seen, ...e.newEpisodes.map((n) => n.id)]);
     const fresh = episodes.filter((x) => !known.has(x.id));
     if (!fresh.length) return false;
     e.newEpisodes.push(...fresh);
-    this.log(`[favoriter] ${e.name}: ${fresh.length} nya avsnitt (${fresh.map((f) => f.label).join(', ')})`);
-    this.save();
+    this.log(`[favorites] ${e.title}: ${fresh.length} new episode(s) (${fresh.map((f) => f.label).join(', ')})`);
+    this.store.save();
     return true;
   }
 
-  seriesKeys() {
-    return this.entries.filter((e) => e.type === 'series').map((e) => e.key);
-  }
-
-  save() {
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      try {
-        fs.mkdirSync(path.dirname(this.file), { recursive: true });
-        const tmp = this.file + '.tmp';
-        fs.writeFileSync(tmp, JSON.stringify(this.entries));
-        fs.renameSync(tmp, this.file);
-      } catch (e) {
-        this.log(`[favoriter] kunde inte spara: ${e.message}`);
-      }
-    }, 1000);
-  }
+  flush() { this.store.flush(); }
 }

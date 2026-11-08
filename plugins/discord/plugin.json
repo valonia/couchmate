@@ -1,0 +1,14 @@
+{
+  "id": "discord",
+  "name": "Discord notifications",
+  "version": "1.0.0",
+  "description": "Posts to a Discord channel when something starts, when someone joins and when a reminder switches channel.",
+  "main": "index.mjs",
+  "requires": "A Discord webhook (channel settings → Integrations → Webhooks → New webhook → Copy URL).",
+  "settings": [
+    { "key": "webhook", "label": "Discord webhook address", "type": "secret", "required": true },
+    { "key": "onLoad", "label": "Post when something starts", "type": "bool", "default": true },
+    { "key": "onJoin", "label": "Post when someone joins", "type": "bool", "default": false },
+    { "key": "onReminder", "label": "Post when a reminder switches channel", "type": "bool", "default": true }
+  ]
+}

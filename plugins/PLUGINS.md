@@ -1,17 +1,29 @@
-# Skriva ett plugin för Couchmates
+# Writing a Couchmate plugin
 
-Ett plugin är en zip-fil som laddas upp i kontrollpanelen (**Plugins → Ladda upp**) och slås på där.
-Det kan lägga till en egen källa i apparna (som Twitch): ett menyval, träffar i sök, strömmar som
-spelas synkat för alla, och en egen spelare. Inget behöver ändras i servern eller apparna.
+The Couchmate apps are a front end. They play video in sync, and they have search, favourites, history,
+settings and translation built in. **Everything else comes from plugins**: the menu entries, the screens
+behind them, search results, what is played, and how the player looks and reacts to the remote.
 
-> Plugins kör med samma rättigheter som servern. Installera bara plugins du litar på.
+A plugin is a folder with a `plugin.json` and a JavaScript module. Zip the folder and upload it in the admin
+panel (**Plugins → Upload plugin**), or put it in `server/plugins/` so that it ships with the server.
 
-## Filerna i zip-filen
+> Plugins run with the same rights as the server. Only install plugins you trust.
+
+## Rules for text
+
+- **Write everything in English.**
+- Text the apps may translate goes through **`api.t()`**: `api.t('Live TV')`,
+  `api.t('{n} viewers', { n: 12 })`. Each device sees it in its own language (or English).
+- Plain strings are **never translated**. Use them for names and content: the plugin's name, channel names,
+  programme titles, stream titles.
+- Settings in the admin panel are always English and never translated.
+
+## Files
 
 ```
-mitt-plugin/
+my-plugin/
   plugin.json
-  index.mjs
+  index.mjs        (plus any other files the module imports)
 ```
 
 `plugin.json`:
@@ -21,151 +33,183 @@ mitt-plugin/
   "id": "youtube",
   "name": "YouTube",
   "version": "1.0.0",
-  "description": "YouTube i Couchmates",
+  "description": "YouTube in Couchmate",
   "main": "index.mjs",
-  "requires": "Internetanslutning från servern till youtube.com"
+  "requires": "Internet access from the server to youtube.com",
+  "homepage": "https://example.com/couchmate-youtube",
+  "settings": [
+    { "key": "apiKey", "label": "API key", "type": "secret", "required": true },
+    { "key": "region", "label": "Region", "type": "select", "default": "SE", "options": ["SE", "NO", "US"] }
+  ]
 }
 ```
 
-`requires` visas i kontrollpanelen, så att den som installerar vet vad som behövs
-(t.ex. "en Docker-container med X").
+- `requires` is shown in the admin panel, so whoever installs the plugin knows what else is needed.
+- Setting types: `text`, `secret` (never shown again), `number`, `bool`, `select` (`options` as strings or
+  `{ "value", "label" }`). `required: true` reminds the admin to fill it in. Read them with `api.settings.<key>`.
+  The plugin is restarted when its settings change.
 
-## Koden
+## The module
 
 ```js
-export const meta = {
-  // Inställningar som visas i kontrollpanelen (läses med api.settings.<key>)
-  settings: [{ key: 'apiKey', label: 'API-nyckel', type: 'text', default: '' }],
-};
-
 export default function setup(api) {
   api.source({
     name: 'YouTube',
-    iconPath: 'M10 15l5-3-5-3z',          // ikonen i menyn: en SVG-sökväg i en 24×24-ruta
+    icon: 'M10 15l5-3-5-3z',                       // SVG path in a 24×24 box
+    menu: [{ id: 'home', title: api.t('YouTube') }],  // optional – default: one entry named after the source
 
-    // Det som visas när man väljer källan i menyn
-    async browse() {
-      return { sections: [{ id: 'popular', title: 'Populärt', items: [/* item, … */] }] };
-    },
-
-    // Träffar när man söker i appen
-    async search(q) { return [/* item, … */]; },
-
-    // Strömmen som ska spelas (HLS, .m3u8). options = valen från spelarens inställningar (se nedan).
-    async resolve(itemId, { options }) {
-      return { url: 'https://…/playlist.m3u8' };
-    },
-
-    // Valfritt: livechatt. Anropa onMessage för varje meddelande, returnera en stoppfunktion.
-    chat(itemId, onMessage) {
-      // onMessage({ user: 'Karin', color: '#FF8800', text: 'Hej!' })
-      return () => { /* stäng anslutningen */ };
-    },
-
-    // Valfritt: knappar i spelarens inställningar (type 'actions').
-    async action(itemId, actionId, { by }) {
-      api.room.notify(`${by} tryckte på ${actionId}`);
-    },
-
-    // Valfritt: hur spelaren ser ut och styrs.
-    player: { keys: { /* … */ }, settings: [ /* … */ ] },
+    async screen(menuId, ctx) { /* → a screen */ },
+    async data(name, params, ctx) { /* → lazy data for a screen */ },
+    async open(itemId, ctx) { /* → a detail screen for an item with action 'open' */ },
+    async search(query, ctx) { /* → items, or { sections } */ },
+    async resolve(itemId, { options }) { /* → where the stream is */ },
+    async next(itemId) { /* → the item that plays after this one, or null */ },
+    async episodes(itemId) { /* → [{ id, label }] for new-episode alerts */ },
+    chat(itemId, onMessage) { /* → stop function */ },
+    async action(itemId, actionId, { by }) { /* a button in the player's settings */ },
+    player: { /* how the player looks and is controlled */ },
   });
 
-  return () => { /* städa upp när pluginet stängs av */ };
+  return () => { /* clean up when the plugin is switched off */ };
 }
 ```
 
-Ett **item** ser ut så här:
+Only `resolve` is required to play anything; add the rest as needed. `ctx.lang` is the device's language
+(e.g. `sv`), in case your source can return content in that language.
+
+### Items
+
+Everything the apps show is an item:
 
 ```js
-{ id: 'abc123', title: 'Videons titel', subtitle: 'Kanal · Kategori', image: 'https://…/bild.jpg', live: false, viewers: 1234 }
+{
+  id: 'abc123',               // unique within the plugin: letters, digits and _ . : @ ~ -
+  title: 'Big Buck Bunny',
+  subtitle: 'Blender · 2008',
+  image: 'https://…',          // https, or /plugins/<id>/… served by your plugin (fetched with the PIN)
+  backdrop: 'https://…',
+  description: '…',
+  kind: 'movie',              // free text: channel, movie, series, episode, stream, video …
+  action: 'play',             // 'play' (default) or 'open' (calls open(id) for a detail screen)
+  live: false,
+  number: 12,                 // channel number
+  viewers: 3400,
+  year: '2008', genre: 'Animation', rating: 7.5, badge: api.t('New'), duration: 596,
+  favorite: true,             // false = cannot be added to favourites
+}
 ```
 
-`image` måste vara en `https`-adress. `live: true` gör att strömmen behandlas som live
-(ingen spolning).
+### Screens
 
-## Spelaren
-
-Med `player` bestämmer pluginet vad fjärrkontrollens knappar gör och vad som finns i
-inställningspanelen. Det gäller alla appar (Android TV, Apple TV och Windows).
-
-### Knappar: `keys`
+`screen(menuId)` and `open(itemId)` return one of these:
 
 ```js
-keys: { ok: 'pause', up: 'info', down: 'settings', left: 'none', right: 'chat' }
+// Rows of cards
+{ type: 'rows', rows: [{ id: 'top', title: api.t('Popular'), style: 'landscape', items: [...] }] }
+
+// A list of groups on the left, the selected group's items on the right.
+// Items are fetched with data('group', { menu, group }).
+{ type: 'groups', style: 'channels' | 'posters' | 'landscape', guide: true, groups: [{ id, title }], initial: 'id' }
+
+// A detail page, e.g. a series with seasons
+{ type: 'detail', item: {...}, facts: ['2019', 'Drama'], seasons: [{ id, title: api.t('Season {n}', { n: 1 }), items: [...] }] }
+
+// Just a message (e.g. "not set up yet")
+{ type: 'message', text: api.t('Nothing here.') }
 ```
 
-| Värde      | Vad som händer                       |
-|------------|--------------------------------------|
-| `pause`    | Pausa eller spela (för alla)         |
-| `settings` | Öppna inställningspanelen            |
-| `chat`     | Visa eller dölj chatten (kräver `chat`) |
-| `info`     | Visa titel och info                  |
-| `none`     | Ingenting                            |
+Any screen can also have `message`, shown above the content.
 
-Hjälptexten längst ner i spelaren byggs automatiskt utifrån knapparna.
-På Windows gäller samma sak för piltangenterna och Enter.
+### Data
 
-### Inställningspanelen: `settings`
+`data(name, params)` returns data that screens load when needed. These names have a fixed shape:
 
-En lista med rutor som visas i den ordningen:
+| name | params | returns |
+|---|---|---|
+| `group` | `menu`, `group` | `[item, …]` (or `{ items, message }`) |
+| `epg` | `ids` (comma separated) | `{ [itemId]: [programme, …] }` – now and next for channels |
+| `guide` | `id` | `[programme, …]` – the whole schedule for one channel |
+| `channels` | `id` | `[item, …]` – the channels to zap between while `id` plays |
 
-| Ruta | Vad den visar |
-|------|---------------|
-| `{ type: 'quality', title: 'Kvalitet' }` | Strömmens kvaliteter. Läses från HLS-spellistan, pluginet behöver inte göra något. |
-| `{ type: 'chat', title: 'Chatt' }` | Visa/dölj chatten. Kräver `chat`. |
-| `{ type: 'audio', title: 'Ljud' }` | Ljudspåren i strömmen (visas bara om det finns fler än ett). |
-| `{ type: 'subtitles', title: 'Undertext' }` | Undertexterna i strömmen (visas bara om det finns några). |
-| `{ type: 'choice', id, title, options: [{ id, label }], default }` | Ett eget val. Sparas per enhet och skickas till `resolve()` som `options[id]`. Strömmen laddas om när man byter. |
-| `{ type: 'actions', id, title, options: [{ id, label }] }` | Knappar. Anropar `action(itemId, knappens id)` på servern. Kräver `action`. |
+A programme is `{ title, description, start, end }` with times in seconds (Unix). Programmes get a
+"remind me" option in the apps; at the start time the server switches everyone to that channel.
 
-`title` kan utelämnas för de inbyggda rutorna – då används en standardtext.
+### Playing: `resolve`
 
-### Exempel (Twitch-pluginet)
+```js
+async resolve(itemId, { options }) {
+  return {
+    url: 'https://…/playlist.m3u8',   // or /plugins/<id>/… served by your plugin
+    type: 'hls',                       // 'hls' or 'file' – guessed from the url if left out
+    live: true,
+    title: '…', subtitle: '…', image: '…', kind: 'stream',   // optional, wins over what the app sent
+    player: { … },                     // optional: a player for this item only
+  };
+}
+```
+
+The apps never get this address directly. They play `/stream/<plugin>/<item id>`, and the server calls
+`resolve` again when the answer is older than 8 minutes. That keeps expiring addresses working for people
+who join later. HLS playlists are passed on with absolute addresses; anything else is a redirect.
+
+When an item ends, the server calls `next(itemId)` and, if it returns an item, shows "next episode" and
+plays it after the countdown set in the admin panel.
+
+### The player
 
 ```js
 player: {
-  keys: { ok: 'pause', down: 'settings', right: 'chat', left: 'none', up: 'info' },
+  // What the remote's buttons do while playing:
+  // pause | settings | chat | info | channels | channel_up | channel_down | seek_back | seek_forward | none
+  keys: { ok: 'pause', up: 'info', down: 'settings', left: 'seek_back', right: 'seek_forward' },
+  channels: true,   // you answer data('channels') – enables channel_up/down and the channel list
+  guide: true,      // you answer data('epg') – the overlay shows what is on now and next
+  // The boxes in the player's settings panel, in this order:
   settings: [
-    { type: 'chat', title: 'Chatt' },
-    { type: 'quality', title: 'Kvalitet' },
-    {
-      type: 'choice', id: 'latency', title: 'Fördröjning', default: 'low',
-      options: [{ id: 'low', label: 'Låg (närmare live)' }, { id: 'normal', label: 'Normal (stabilare)' }],
-    },
+    { type: 'quality', title: api.t('Quality') },      // the stream's qualities (from the HLS playlist)
+    { type: 'chat', title: api.t('Chat') },            // show/hide the chat (needs chat())
+    { type: 'audio' }, { type: 'subtitles' },          // tracks in the stream
+    { type: 'choice', id: 'latency', title: api.t('Latency'), default: 'low',
+      options: [{ id: 'low', label: api.t('Low') }, { id: 'normal', label: api.t('Normal') }] },
+                                                       // saved per device, sent to resolve() as options.latency
+    { type: 'actions', id: 'clip', title: api.t('Clip'), options: [{ id: 'make', label: api.t('Make a clip') }] },
+                                                       // buttons – call action(itemId, 'make')
   ],
-},
-```
-
-och i `resolve`:
-
-```js
-async resolve(login, { options }) {
-  const lowLatency = options.latency !== 'normal';
-  // …
 }
 ```
 
-### Utan `player`
+Without `player`, OK pauses, ▼ and ▶ open the settings, ◀ opens the chat, and the panel shows chat,
+quality, audio and subtitles.
 
-Om pluginet inte anger något används: OK pausar, ▼ och ▶ öppnar inställningarna, ◀ visar chatten
-(om det finns), och panelen visar chatt, kvalitet och ljud.
+### Chat
 
-## Mer som pluginet kan göra
+`chat(itemId, onMessage)` is called when live media plays and someone shows the chat. Call
+`onMessage({ user, color, text })` for each message and return a function that closes the connection.
 
-- `api.on(händelse, fn)`: `load`, `play`, `pause`, `seek`, `stop`, `member_join`, `member_leave`, `reminder`, `state`
-- `api.room`: `state()`, `members()`, `load(media)`, `play()`, `pause()`, `seek(sekunder)`, `stop()`, `notify(text)`
-- `api.route('GET', '/sökväg', (req, res) => …)`: egna adresser under `/plugins/<id>/…`
-- `api.settings`: värdena från kontrollpanelen
-- `api.log(...)`: syns i kontrollpanelens logg
+## The `api` object
 
-## Bygga zip-filen
+| | |
+|---|---|
+| `api.id` | the plugin's id |
+| `api.settings` | the current settings |
+| `api.t(text, vars?)` | translatable text |
+| `api.log(...)` | writes to the server log (shown in the admin panel) |
+| `api.dataDir` | a folder for the plugin's own files (kept between restarts, removed with the plugin) |
+| `api.cacheDir` | a folder for temporary files (emptied when the server starts) |
+| `api.route(method, path, handler, { auth })` | an HTTP endpoint at `/plugins/<id><path>`. A path ending in `/*` matches everything below it. `auth`: `'pin'` (default – the apps), `'admin'` (logged in to the admin panel) or `'public'`. `handler(req, res, { path, query })` |
+| `api.proxy(req, res, url, headers?)` | passes an upstream response on, with Range support (seeking) |
+| `api.link(label, url)` | a link on the plugin's card in the admin panel, e.g. a status page |
+| `api.on(event, fn)` | events: `load`, `play`, `pause`, `seek`, `stop`, `ended`, `member_join`, `member_leave`, `reminder`, `state` |
+| `api.room` | `state()`, `members()`, `load({ plugin, id, title… })`, `play()`, `pause()`, `seek(seconds)`, `stop()`, `notify(text)` |
 
-Lägg mappen i `server/plugins/` och kör:
+## Examples
 
-```
-node plugins/build.mjs
-```
+The plugins in this folder are complete examples:
 
-Zip-filen hamnar i `server/plugins/dist/`. Ladda upp den i kontrollpanelen och slå på pluginet.
-Twitch-pluginet i `server/plugins/twitch/` är ett komplett exempel.
+- [`iptv/`](iptv/) – live TV with a programme guide, movies and series from Dispatcharr; its own stream proxy,
+  a shared download for movies, the next episode, new-episode alerts and an admin status page.
+- [`twitch/`](twitch/) – rows of live streams, search, HLS with quality choice, live chat and a player choice.
+- [`discord/`](discord/) – no menu entry; only listens to events.
+- [`now-playing/`](now-playing/) – a public web page using `api.route` and `api.room`.
+
+`npm run plugins:zip` packs every folder here into `dist/<id>.zip`.

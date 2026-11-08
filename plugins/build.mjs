@@ -1,5 +1,5 @@
-// Packar varje plugin-mapp här (t.ex. twitch/) till dist/<id>.zip, redo att laddas upp i adminpanelen.
-// Kör: node plugins/build.mjs
+// Packs every plugin folder here (e.g. twitch/) into dist/<id>.zip, ready to upload in the admin panel.
+// Run: npm run plugins:zip
 import fs from 'node:fs';
 import path from 'node:path';
 import zlib from 'node:zlib';
@@ -9,7 +9,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const dist = path.join(here, 'dist');
 fs.mkdirSync(dist, { recursive: true });
 
-// CRC-32 (krävs i zip-formatet)
+// CRC-32 (required by the zip format)
 const table = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = table[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 
@@ -45,5 +45,5 @@ for (const dir of fs.readdirSync(here)) {
     .map((f) => ({ name: `${dir}/${f}`, data: fs.readFileSync(path.join(full, f)) }));
   const id = JSON.parse(fs.readFileSync(path.join(full, 'plugin.json'), 'utf8')).id || dir;
   fs.writeFileSync(path.join(dist, `${id}.zip`), zip(files));
-  console.log(`dist/${id}.zip (${files.length} filer)`);
+  console.log(`dist/${id}.zip (${files.length} files)`);
 }

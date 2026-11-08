@@ -1,0 +1,31 @@
+{
+  "id": "iptv",
+  "name": "IPTV",
+  "version": "2.0.0",
+  "description": "Live TV with a programme guide, movies and series from Dispatcharr (Xtream). Search, reminders, the next episode and a merged programme guide.",
+  "main": "index.mjs",
+  "requires": "Dispatcharr (https://github.com/Dispatcharr/Dispatcharr), reachable from the Couchmate server, with an Xtream user.",
+  "homepage": "https://github.com/Dispatcharr/Dispatcharr",
+  "settings": [
+    { "key": "xtreamUrl", "label": "Dispatcharr address", "type": "text", "default": "", "required": true, "placeholder": "http://192.168.1.10:9191",
+      "help": "How the Couchmate server reaches Dispatcharr. In Docker, e.g. http://dispatcharr:9191 or http://host.docker.internal:9191." },
+    { "key": "user", "label": "Xtream user", "type": "text", "default": "", "required": true, "help": "Create a user in Dispatcharr." },
+    { "key": "pass", "label": "Xtream password", "type": "secret", "required": true },
+    { "key": "streamMode", "label": "Stream mode", "type": "select", "default": "proxy",
+      "options": [{ "value": "proxy", "label": "Proxy – all video goes through Couchmate (recommended)" }, { "value": "direct", "label": "Direct – the apps fetch from Dispatcharr" }] },
+    { "key": "publicXtreamUrl", "label": "Public Dispatcharr address", "type": "text", "default": "", "help": "Only for direct mode: the address the apps use to reach Dispatcharr." },
+    { "key": "sharedVod", "label": "Shared movie download", "type": "bool", "default": true,
+      "help": "Movies and episodes are fetched once and shared with everyone – only one provider connection. Needs proxy mode." },
+    { "key": "liveExt", "label": "File type for live channels", "type": "select", "default": "ts", "options": ["ts", "m3u8"] },
+    { "key": "cacheSeconds", "label": "Catalogue cache (seconds)", "type": "number", "default": 300 },
+    { "key": "epgPrimaryUrl", "label": "Merged guide: primary guide (XMLTV link)", "type": "secret",
+      "help": "Your provider's XMLTV. Empty = no merged guide. Point Dispatcharr's EPG source at /plugins/iptv/epg/merged.xml.gz?pin=<PIN>." },
+    { "key": "epgFallbackCountries", "label": "Merged guide: fallback for countries", "type": "text", "default": "auto",
+      "help": "\"auto\" = the countries of your channels, or e.g. \"se,no\"." },
+    { "key": "epgFallbackTemplate", "label": "Merged guide: fallback source per country", "type": "text", "default": "https://epgshare01.online/epgshare01/epg_ripper_{CC}1.xml.gz",
+      "help": "{CC} is replaced by the country code, e.g. SE." },
+    { "key": "epgFallbackUrl", "label": "Merged guide: extra fallback sources", "type": "text", "default": "", "help": "More XMLTV links, separated by commas." },
+    { "key": "epgFallbackMap", "label": "Merged guide: manual channel mappings", "type": "text", "default": "", "help": "primaryid=fallbackid, separated by commas." },
+    { "key": "epgMergeHours", "label": "Merged guide: rebuild every (hours)", "type": "number", "default": 3 }
+  ]
+}

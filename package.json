@@ -1,14 +1,15 @@
 {
-  "name": "synctv-server",
-  "version": "1.0.0",
-  "description": "Sync-server för Couchmates – gemensam uppspelning från Dispatcharr (Xtream)",
+  "name": "couchmate-server",
+  "version": "2.0.0",
+  "description": "Couchmate server – watch together. Shared playback, favourites, history and reminders; plugins provide the content.",
   "type": "module",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "plugins:zip": "node plugins/build.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "ws": "^8.18.0"

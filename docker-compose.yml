@@ -1,20 +1,19 @@
-# Kör sync-servern bredvid Dispatcharr.
-# Om Dispatcharr ligger i samma compose-fil/nätverk: använd XTREAM_URL=http://dispatcharr:9191
-# Annars: XTREAM_URL=http://<ip-till-dispatcharr>:9191
+# Couchmate server. Start with:  docker compose up -d
+# Then open http://<this computer>:8787/admin, create the admin password, set a PIN code and switch on plugins.
 services:
-  synctv:
+  couchmate:
     build: .
-    container_name: synctv
+    image: couchmate
+    container_name: couchmate
     restart: unless-stopped
     ports:
       - "8787:8787"
-    env_file: .env
     volumes:
-      # Tillfällig fil för filmen som spelas (raderas när ni byter). Behöver plats för en hel film.
-      - synctv-cache:/cache
-      # Historik (vad ni tittat på + var ni slutade) – sparas mellan omstarter.
-      - synctv-data:/data
+      # Settings, plugins, favourites, history, reminders and translations – kept between restarts.
+      - couchmate-data:/data
+      # Temporary files, e.g. the movie that is playing (shared download). Needs room for a whole movie.
+      - couchmate-cache:/cache
 
 volumes:
-  synctv-cache:
-  synctv-data:
+  couchmate-data:
+  couchmate-cache:

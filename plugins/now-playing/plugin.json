@@ -1,0 +1,10 @@
+{
+  "id": "now-playing",
+  "name": "Now playing page",
+  "version": "1.0.0",
+  "description": "A web page that shows what is playing and who is watching – nice on a tablet or a second screen.",
+  "main": "index.mjs",
+  "settings": [
+    { "key": "title", "label": "Heading on the page", "type": "text", "default": "Couchmate" }
+  ]
+}

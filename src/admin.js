@@ -1,6 +1,6 @@
-// Adminpanelen (/admin) och nedladdningssidan (/download).
-// Inloggning med ett eget adminlösenord (inte rummets PIN). Första gången skapas lösenordet,
-// och då krävs rummets PIN så att ingen utomstående hinner före.
+// The admin panel (/admin) and the download page (/download).
+// The very first time, whoever opens /admin creates the admin password. After that the panel needs it.
+// The PIN code the apps use is set in the panel.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,9 +9,9 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { logSince, onLog } from './logbuf.js';
 import { GROUPS } from './settings.js';
+import { json, readBody, readJson } from './util.js';
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'admin');
-const EXAMPLES_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'plugin-examples');
 const STATIC = {
   '/admin': ['index.html', 'text/html; charset=utf-8'],
   '/admin/': ['index.html', 'text/html; charset=utf-8'],
@@ -19,51 +19,25 @@ const STATIC = {
   '/admin/admin.css': ['admin.css', 'text/css; charset=utf-8'],
 };
 const SESSION_MS = 7 * 24 * 3600 * 1000;
-const MAX_UPLOAD = 400 * 1024 * 1024; // appar (Windows-zip) kan vara stora
+const MAX_UPLOAD = 400 * 1024 * 1024; // app files can be large
 const SAFE_FILE = /^[A-Za-z0-9][A-Za-z0-9._ -]{0,120}$/;
 
-function readBody(req, limit) {
-  return new Promise((resolve, reject) => {
-    const chunks = [];
-    let size = 0;
-    req.on('data', (c) => {
-      size += c.length;
-      if (size > limit) { reject(new Error('Filen är för stor')); req.destroy(); return; }
-      chunks.push(c);
-    });
-    req.on('end', () => resolve(Buffer.concat(chunks)));
-    req.on('error', reject);
-  });
-}
-
-const json = (res, status, body) => {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
-  res.end(JSON.stringify(body));
-};
-
-function hash(password, salt = randomBytes(16).toString('hex')) {
-  return { salt, hash: scryptSync(password, salt, 64).toString('hex') };
-}
-
-function cookie(req, name) {
+const hash = (password, salt = randomBytes(16).toString('hex')) => ({ salt, hash: scryptSync(password, salt, 64).toString('hex') });
+const cookie = (req, name) => {
   const m = new RegExp(`(?:^|;\\s*)${name}=([^;]+)`).exec(req.headers.cookie || '');
   return m ? decodeURIComponent(m[1]) : null;
-}
-
+};
 const fmtSize = (n) => (n > 1e9 ? `${(n / 1e9).toFixed(1)} GB` : n > 1e6 ? `${(n / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1e3))} kB`);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-/**
- * @param ctx  allt adminpanelen behöver från servern (rummet, data, inställningar, plugins …)
- */
 export function createAdmin(ctx) {
-  const { dataDir, settings, plugins } = ctx;
+  const { dataDir, settings, plugins, room, roomApi } = ctx;
   const authFile = path.join(dataDir, 'admin.json');
   const downloadsDir = path.join(dataDir, 'downloads');
   const metaFile = path.join(downloadsDir, '.descriptions.json');
   fs.mkdirSync(downloadsDir, { recursive: true });
-  const sessions = new Map(); // token → utgång
-  const attempts = new Map(); // ip → [tider]
+  const sessions = new Map(); // token → expiry
+  const attempts = new Map(); // ip → [times]
   const startedAt = Date.now();
 
   const readAuth = () => { try { return JSON.parse(fs.readFileSync(authFile, 'utf8')); } catch { return null; } };
@@ -71,8 +45,7 @@ export function createAdmin(ctx) {
   const checkPassword = (password) => {
     const a = readAuth();
     if (!a) return false;
-    const h = scryptSync(String(password), a.salt, 64);
-    return timingSafeEqual(h, Buffer.from(a.hash, 'hex'));
+    return timingSafeEqual(scryptSync(String(password), a.salt, 64), Buffer.from(a.hash, 'hex'));
   };
   const tooMany = (ip) => {
     const t = Date.now();
@@ -80,12 +53,13 @@ export function createAdmin(ctx) {
     attempts.set(ip, list);
     return list.length >= 10;
   };
+  const failed = (ip) => attempts.get(ip)?.push(Date.now());
   const newSession = (res) => {
     const token = randomBytes(32).toString('hex');
     sessions.set(token, Date.now() + SESSION_MS);
     res.setHeader('set-cookie', `cm_admin=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}`);
   };
-  const loggedIn = (req) => {
+  const isAdmin = (req) => {
     const t = cookie(req, 'cm_admin');
     const exp = t && sessions.get(t);
     if (!exp || exp < Date.now()) { if (t) sessions.delete(t); return false; }
@@ -104,46 +78,45 @@ export function createAdmin(ctx) {
       .sort((a, b) => a.name.localeCompare(b.name));
   };
 
-  // ---------------------------------------------------------------- nedladdningssidan (publik)
+  // ---------------------------------------------------------------- download page (public)
   function downloadPage(req, res) {
     const files = downloadList();
-    const host = req.headers.host || 'servern';
-    const guess = (f) => /\.apk$/i.test(f) ? 'Android TV' : /\.ipa$/i.test(f) ? 'Apple TV' : /windows|\.zip$|\.exe$/i.test(f) ? 'Windows' : 'Fil';
+    const host = req.headers.host || 'this-server';
+    const name = settings.get('serverName') || 'Couchmate';
+    const guess = (f) => (/\.apk$/i.test(f) ? 'Android TV' : /\.ipa$/i.test(f) ? 'Apple TV' : /windows|\.zip$|\.exe$|\.msix$/i.test(f) ? 'Windows' : 'File');
     const rows = files.map((f) => `
       <a class="file" href="/download/${encodeURIComponent(f.name)}" download>
         <span class="kind">${esc(guess(f.name))}</span>
         <span class="name">${esc(f.name)}</span>
         ${f.description ? `<span class="desc">${esc(f.description)}</span>` : ''}
         <span class="size">${fmtSize(f.size)}</span>
-      </a>`).join('') || '<p class="empty">Inga filer uppladdade än.</p>';
+      </a>`).join('') || '<p class="empty">No files uploaded yet.</p>';
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-cache' });
-    res.end(`<!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Couchmates – ladda ner</title><link rel="stylesheet" href="/admin/admin.css"></head>
+    res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>${esc(name)} – download</title><link rel="stylesheet" href="/admin/admin.css"></head>
 <body class="dl"><main>
-<h1><span class="b">Couch</span><span class="a">mates</span></h1>
-<p class="lead">Titta på samma sak samtidigt. Ladda ner appen för din enhet och anslut till servern.</p>
+<h1><span class="b">Couch</span><span class="a">mate</span></h1>
+<p class="lead">Watch together. Download the app for your device and connect to ${esc(name)}.</p>
 <section class="files">${rows}</section>
 <section class="howto">
-  <h2>Så ansluter du</h2>
+  <h2>How to connect</h2>
   <ol>
-    <li><b>Serveradress:</b> <code>http://${esc(host)}</code></li>
-    <li><b>PIN-kod:</b> fråga den som har servern.</li>
-    <li><b>Namn:</b> det du vill att de andra ska se.</li>
+    <li><b>Server address:</b> <code>http://${esc(host)}</code></li>
+    <li><b>PIN code:</b> ask whoever runs the server.</li>
+    <li><b>Name:</b> what the others will see.</li>
   </ol>
-  <h2>Installera</h2>
+  <h2>Install</h2>
   <ul>
-    <li><b>Windows:</b> packa upp zip-filen och starta <code>Couchmates.exe</code>. Säger Windows "skyddade datorn": välj <i>Mer info → Kör ändå</i>.</li>
-    <li><b>Android TV / Google TV:</b> installera APK-filen, t.ex. med appen <i>Downloader</i> eller <i>Send Files to TV</i>.</li>
-    <li><b>Apple TV:</b> installeras med <i>tvsign</i> (eller Sideloadly) och ditt Apple-ID.</li>
+    <li><b>Android TV / Google TV:</b> install the APK, e.g. with the <i>Downloader</i> or <i>Send Files to TV</i> app.</li>
   </ul>
 </section></main></body></html>`);
   }
 
   function serveDownload(res, name) {
-    if (!SAFE_FILE.test(name)) return json(res, 400, { error: 'Ogiltigt filnamn' });
+    if (!SAFE_FILE.test(name)) return json(res, 400, { error: 'Invalid file name' });
     const file = path.join(downloadsDir, name);
     let st;
-    try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'Filen finns inte' }); }
+    try { st = fs.statSync(file); } catch { return json(res, 404, { error: 'No such file' }); }
     res.writeHead(200, {
       'content-type': 'application/octet-stream', 'content-length': st.size,
       'content-disposition': `attachment; filename="${name.replace(/"/g, '')}"`,
@@ -151,34 +124,33 @@ export function createAdmin(ctx) {
     fs.createReadStream(file).pipe(res);
   }
 
-  // ---------------------------------------------------------------- admin-API
+  // ---------------------------------------------------------------- admin API
   async function api(req, res, sub) {
     const method = req.method;
     const ip = req.socket.remoteAddress || '';
 
-    if (sub === '/session' && method === 'GET') return json(res, 200, { setupNeeded: !readAuth(), loggedIn: loggedIn(req) });
+    if (sub === '/session' && method === 'GET') return json(res, 200, { setupNeeded: !readAuth(), loggedIn: isAdmin(req) });
 
     if (sub === '/setup' && method === 'POST') {
-      if (readAuth()) return json(res, 409, { error: 'Lösenordet är redan skapat' });
-      if (tooMany(ip)) return json(res, 429, { error: 'För många försök – vänta några minuter' });
-      const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
-      if (!ctx.pinOk(b.pin)) { attempts.get(ip).push(Date.now()); return json(res, 401, { error: 'Fel PIN-kod' }); }
-      if (String(b.password || '').length < 8) return json(res, 400, { error: 'Lösenordet måste vara minst 8 tecken' });
+      if (readAuth()) return json(res, 409, { error: 'The admin password has already been created' });
+      if (tooMany(ip)) return json(res, 429, { error: 'Too many attempts – wait a few minutes' });
+      const b = await readJson(req, 10000);
+      if (String(b.password || '').length < 8) return json(res, 400, { error: 'The password must be at least 8 characters' });
       writeAuth(String(b.password));
       newSession(res);
-      console.log('[admin] adminlösenord skapat');
+      console.log('[admin] admin password created');
       return json(res, 200, { ok: true });
     }
 
     if (sub === '/login' && method === 'POST') {
-      if (tooMany(ip)) return json(res, 429, { error: 'För många försök – vänta några minuter' });
-      const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
-      if (!checkPassword(b.password || '')) { attempts.get(ip).push(Date.now()); return json(res, 401, { error: 'Fel lösenord' }); }
+      if (tooMany(ip)) return json(res, 429, { error: 'Too many attempts – wait a few minutes' });
+      const b = await readJson(req, 10000);
+      if (!checkPassword(b.password || '')) { failed(ip); return json(res, 401, { error: 'Wrong password' }); }
       newSession(res);
       return json(res, 200, { ok: true });
     }
 
-    if (!loggedIn(req)) return json(res, 401, { error: 'Inte inloggad' });
+    if (!isAdmin(req)) return json(res, 401, { error: 'Not logged in' });
 
     if (sub === '/logout' && method === 'POST') {
       sessions.delete(cookie(req, 'cm_admin'));
@@ -186,51 +158,47 @@ export function createAdmin(ctx) {
       return json(res, 200, { ok: true });
     }
     if (sub === '/password' && method === 'POST') {
-      const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
-      if (!checkPassword(b.current || '')) return json(res, 401, { error: 'Nuvarande lösenord stämmer inte' });
-      if (String(b.password || '').length < 8) return json(res, 400, { error: 'Lösenordet måste vara minst 8 tecken' });
+      const b = await readJson(req, 10000);
+      if (!checkPassword(b.current || '')) return json(res, 401, { error: 'The current password is wrong' });
+      if (String(b.password || '').length < 8) return json(res, 400, { error: 'The password must be at least 8 characters' });
       writeAuth(String(b.password));
       sessions.clear();
       newSession(res);
       return json(res, 200, { ok: true });
     }
 
-    // ---- översikt
+    // ---- overview
     if (sub === '/overview' && method === 'GET') {
       const mem = process.memoryUsage();
       return json(res, 200, {
-        state: ctx.room.state(),
+        state: roomApi.state(),
         serverNow: Date.now(),
-        members: ctx.room.members(),
-        server: {
-          uptime: Math.round((Date.now() - startedAt) / 1000), node: process.version, rss: mem.rss,
-          host: os.hostname(), load: os.loadavg()[0], dispatcharr: settings.get('xtreamUrl'), streamMode: settings.get('streamMode'),
-        },
+        members: roomApi.members(),
+        server: { version: ctx.version, uptime: Math.round((Date.now() - startedAt) / 1000), node: process.version, rss: mem.rss, host: os.hostname() },
+        setup: { pin: Boolean(settings.get('pin')), plugins: plugins.list().some((p) => p.enabled) },
         counts: { favorites: ctx.favorites.list().length, reminders: ctx.reminders.list().length, history: ctx.history.list().length },
-        epg: ctx.epgStatus(),
-        cache: ctx.cacheStatus(),
         plugins: plugins.list().map((p) => ({ id: p.id, name: p.name, enabled: p.enabled, error: p.error })),
       });
     }
 
-    // ---- styr rummet
+    // ---- control the room
     const roomCmd = /^\/room\/(play|pause|stop|seek|kick)$/.exec(sub);
     if (roomCmd && method === 'POST') {
-      const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
+      const b = await readJson(req, 10000);
       const c = roomCmd[1];
-      if (c === 'seek') ctx.room.seek(Number(b.position) || 0);
-      else if (c === 'kick') { if (!ctx.room.kick(String(b.id || ''))) return json(res, 404, { error: 'Hittade inte enheten' }); }
-      else ctx.room[c]();
+      if (c === 'seek') roomApi.seek(Number(b.position) || 0);
+      else if (c === 'kick') { if (!roomApi.kick(String(b.id || ''))) return json(res, 404, { error: 'Device not found' }); }
+      else roomApi[c]();
       return json(res, 200, { ok: true });
     }
 
-    // ---- inställningar
+    // ---- settings
     if (sub === '/settings' && method === 'GET') return json(res, 200, { groups: GROUPS, settings: settings.forAdmin() });
     if (sub === '/settings' && method === 'PUT') {
-      const b = JSON.parse((await readBody(req, 100000)).toString() || '{}');
+      const b = await readJson(req);
       try {
         const changed = settings.update(b);
-        if (changed.length) console.log(`[admin] inställningar ändrade: ${changed.join(', ')}`);
+        if (changed.length) console.log(`[admin] settings changed: ${changed.join(', ')}`);
         return json(res, 200, { ok: true, changed, settings: settings.forAdmin() });
       } catch (e) {
         return json(res, 400, { error: e.message });
@@ -241,21 +209,22 @@ export function createAdmin(ctx) {
     if (sub === '/data' && method === 'GET') {
       return json(res, 200, { reminders: ctx.reminders.list(), favorites: ctx.favorites.list(), history: ctx.history.list() });
     }
-    const del = /^\/data\/(reminders|favorites|history)\/(.+)$/.exec(sub);
+    const del = /^\/data\/(reminders|favorites|history)(?:\/(.+))?$/.exec(sub);
     if (del && method === 'DELETE') {
-      const key = decodeURIComponent(del[2]);
-      ctx.removeData(del[1], key);
+      const key = del[2] ? decodeURIComponent(del[2]) : null;
+      if (del[1] === 'reminders' && key) {
+        if (ctx.reminders.remove(key)) room.broadcastReminders();
+        if (room.state.reminder?.key === key) room.clearReminder(true);
+      } else if (del[1] === 'favorites' && key) {
+        if (ctx.favorites.remove(key)) room.broadcastFavorites();
+      } else if (del[1] === 'history') {
+        if (key) ctx.history.remove(key); else ctx.history.clear();
+        room.broadcastHistory();
+      }
       return json(res, 200, { ok: true });
     }
-    if (sub === '/data/history' && method === 'DELETE') { ctx.removeData('history', null); return json(res, 200, { ok: true }); }
 
-    // ---- tablå
-    if (sub === '/epg/rebuild' && method === 'POST') {
-      await ctx.rebuildEpg();
-      return json(res, 200, ctx.epgStatus());
-    }
-
-    // ---- logg
+    // ---- log
     if (sub === '/logs' && method === 'GET') {
       const since = Number(new URL(req.url, 'http://x').searchParams.get('since')) || 0;
       return json(res, 200, logSince(since));
@@ -269,69 +238,68 @@ export function createAdmin(ctx) {
       return;
     }
 
-    // ---- nedladdningar
+    // ---- downloads
     if (sub === '/downloads' && method === 'GET') return json(res, 200, downloadList());
     const dl = /^\/downloads\/(.+)$/.exec(sub);
     if (dl) {
       const name = decodeURIComponent(dl[1]);
-      if (!SAFE_FILE.test(name)) return json(res, 400, { error: 'Ogiltigt filnamn (bokstäver, siffror, punkt, bindestreck)' });
+      if (!SAFE_FILE.test(name)) return json(res, 400, { error: 'Invalid file name (letters, digits, dot, dash)' });
       const file = path.join(downloadsDir, name);
       if (method === 'PUT') {
         const body = await readBody(req, MAX_UPLOAD);
         fs.writeFileSync(file, body);
-        console.log(`[admin] laddade upp ${name} (${fmtSize(body.length)})`);
+        console.log(`[admin] uploaded ${name} (${fmtSize(body.length)})`);
         return json(res, 200, downloadList());
       }
       if (method === 'PATCH') {
-        const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
+        const b = await readJson(req, 10000);
         const d = descriptions();
         d[name] = String(b.description || '').slice(0, 300);
         fs.writeFileSync(metaFile, JSON.stringify(d, null, 1));
         return json(res, 200, downloadList());
       }
       if (method === 'DELETE') {
-        try { fs.unlinkSync(file); } catch { /* redan borta */ }
+        try { fs.unlinkSync(file); } catch { /* already gone */ }
         return json(res, 200, downloadList());
       }
     }
 
     // ---- plugins
-    if (sub === '/plugins' && method === 'GET') {
-      const examples = fs.existsSync(EXAMPLES_DIR) ? fs.readdirSync(EXAMPLES_DIR).filter((f) => f.endsWith('.mjs')) : [];
-      return json(res, 200, { plugins: plugins.list(), examples });
-    }
+    const pluginList = () => ({ plugins: plugins.list(), bundled: plugins.bundled() });
+    if (sub === '/plugins' && method === 'GET') return json(res, 200, pluginList());
     if (sub === '/plugins/upload' && method === 'PUT') {
       const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
-      const body = await readBody(req, 50 * 1024 * 1024);
+      if (!/\.zip$/i.test(name)) return json(res, 400, { error: 'Upload the plugin as a .zip file' });
       try {
-        const p = /\.zip$/i.test(name) ? await plugins.installZip(name, body) : await plugins.install(name, body.toString('utf8'));
-        console.log(`[admin] plugin installerat: ${p.id}`);
-        return json(res, 200, { plugins: plugins.list() });
+        const p = await plugins.installZip(name, await readBody(req, 50 * 1024 * 1024));
+        console.log(`[admin] plugin installed: ${p.id}`);
+        return json(res, 200, pluginList());
       } catch (e) { return json(res, 400, { error: e.message }); }
     }
-    if (sub === '/plugins/example' && method === 'POST') {
-      const b = JSON.parse((await readBody(req, 10000)).toString() || '{}');
-      const f = path.basename(String(b.file || ''));
-      if (!f.endsWith('.mjs') || !fs.existsSync(path.join(EXAMPLES_DIR, f))) return json(res, 404, { error: 'Exemplet finns inte' });
-      await plugins.install(f, fs.readFileSync(path.join(EXAMPLES_DIR, f), 'utf8'));
-      return json(res, 200, { plugins: plugins.list() });
+    const bundled = /^\/plugins\/bundled\/([a-z0-9_-]+)$/.exec(sub);
+    if (bundled && method === 'POST') {
+      try {
+        const p = await plugins.installBundled(bundled[1]);
+        console.log(`[admin] plugin installed: ${p.id}`);
+        return json(res, 200, pluginList());
+      } catch (e) { return json(res, 400, { error: e.message }); }
     }
     const pl = /^\/plugins\/([a-z0-9_-]+)(\/enable|\/disable|\/settings)?$/.exec(sub);
     if (pl) {
       try {
         if (pl[2] === '/enable' && method === 'POST') await plugins.setEnabled(pl[1], true);
         else if (pl[2] === '/disable' && method === 'POST') await plugins.setEnabled(pl[1], false);
-        else if (pl[2] === '/settings' && method === 'PUT') await plugins.setSettings(pl[1], JSON.parse((await readBody(req, 100000)).toString() || '{}'));
+        else if (pl[2] === '/settings' && method === 'PUT') await plugins.setSettings(pl[1], await readJson(req));
         else if (!pl[2] && method === 'DELETE') plugins.remove(pl[1]);
-        else return json(res, 404, { error: 'Okänt anrop' });
-        return json(res, 200, { plugins: plugins.list() });
+        else return json(res, 404, { error: 'Unknown request' });
+        return json(res, 200, pluginList());
       } catch (e) { return json(res, 400, { error: e.message }); }
     }
 
-    return json(res, 404, { error: 'Okänt anrop' });
+    return json(res, 404, { error: 'Unknown request' });
   }
 
-  /** Returnerar true om anropet hanterades här. */
+  /** Returns true if the request was handled here. */
   async function handle(req, res, pathname) {
     if (STATIC[pathname] && req.method === 'GET') {
       const [file, type] = STATIC[pathname];
@@ -339,18 +307,18 @@ export function createAdmin(ctx) {
         res.writeHead(200, { 'content-type': type, 'cache-control': 'no-cache' });
         res.end(fs.readFileSync(path.join(UI_DIR, file)));
       } catch {
-        json(res, 404, { error: 'Adminpanelen saknas' });
+        json(res, 404, { error: 'The admin panel is missing' });
       }
       return true;
     }
     if (pathname === '/download' || pathname === '/download/') { downloadPage(req, res); return true; }
     if (pathname.startsWith('/download/') && req.method === 'GET') { serveDownload(res, decodeURIComponent(pathname.slice(10))); return true; }
     if (pathname.startsWith('/admin/api/')) {
-      try { await api(req, res, pathname.slice(10)); } catch (e) { json(res, 500, { error: e.message }); }
+      try { await api(req, res, pathname.slice(10)); } catch (e) { if (!res.headersSent) json(res, 500, { error: e.message }); }
       return true;
     }
     return false;
   }
 
-  return { handle };
+  return { handle, isAdmin, hasPassword: () => Boolean(readAuth()) };
 }

@@ -1,17 +1,7 @@
-// Exempelplugin: en enkel sida som visar vad som spelas just nu och vilka som tittar.
-// Bra på en surfplatta eller en extra skärm. Sidan finns på /plugins/nu-spelas/ (kräver ingen inloggning,
-// men visar inga hemligheter – bara titel och namn).
-
-export const meta = {
-  name: 'Nu spelas-sida',
-  version: '1.0',
-  description: 'Visar vad som spelas och vilka som tittar på /plugins/nu-spelas/ – t.ex. för en surfplatta.',
-  settings: [
-    { key: 'title', label: 'Rubrik på sidan', type: 'text', default: 'Couchmates' },
-  ],
-};
+// Now playing page at /plugins/now-playing/ – no login needed, and it shows no secrets (only titles and names).
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const plain = (v) => (v && typeof v === 'object' && typeof v.$t === 'string' ? v.$t : v);
 
 export default function setup(api) {
   api.route('GET', '/data', (req, res) => {
@@ -19,17 +9,15 @@ export default function setup(api) {
     const m = st.media;
     res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
     res.end(JSON.stringify({
-      // Ingen bild: bildlänkarna innehåller rummets PIN, och den här sidan kräver ingen inloggning.
-      media: m ? { title: m.title, subtitle: m.subtitle, type: m.type } : null,
+      media: m ? { title: plain(m.title), subtitle: plain(m.subtitle), live: m.live } : null,
       paused: st.paused,
-      position: st.position,
       viewers: api.room.members().filter((x) => x.watching).map((x) => x.name),
     }));
-  });
+  }, { auth: 'public' });
 
   api.route('GET', '/', (req, res) => {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
-    res.end(`<!doctype html><html lang="sv"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(api.settings.title)}</title>
 <style>
   :root { color-scheme: dark; }
@@ -43,21 +31,23 @@ export default function setup(api) {
   .p { display: inline-block; margin-top: 10px; padding: 3px 10px; border-radius: 999px; background: #1a1f29; color: #f5c451; font-size: 14px; }
 </style></head><body><main>
 <h1>${esc(api.settings.title)}</h1>
-<div id="c">Laddar…</div>
+<div id="c">Loading…</div>
 </main>
 <script>
 async function tick() {
   try {
     const d = await (await fetch('data')).json();
     const c = document.getElementById('c');
-    if (!d.media) { c.innerHTML = '<div class="t">Inget spelas</div>'; return; }
-    c.innerHTML = '<div class="t"></div><div class="s"></div>' + (d.paused ? '<div class="p">Pausad</div>' : '') + '<div class="v"></div>';
+    if (!d.media) { c.innerHTML = '<div class="t">Nothing is playing</div>'; return; }
+    c.innerHTML = '<div class="t"></div><div class="s"></div>' + (d.paused ? '<div class="p">Paused</div>' : '') + '<div class="v"></div>';
     c.querySelector('.t').textContent = d.media.title;
-    c.querySelector('.s').textContent = d.media.subtitle || (d.media.type === 'live' ? 'Live-TV' : '');
-    c.querySelector('.v').textContent = d.viewers.length ? 'Tittar: ' + d.viewers.join(', ') : '';
+    c.querySelector('.s').textContent = d.media.subtitle || (d.media.live ? 'Live' : '');
+    c.querySelector('.v').textContent = d.viewers.length ? 'Watching: ' + d.viewers.join(', ') : '';
   } catch {}
 }
 tick(); setInterval(tick, 5000);
 </script></body></html>`);
-  });
+  }, { auth: 'public' });
+
+  api.link('Open the page', `/plugins/${api.id}/`);
 }
