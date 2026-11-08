@@ -413,8 +413,8 @@ function renderTop() {
   const newFav = app.favorites.reduce((n, f) => n + (f.newCount || 0), 0);
   fill(top,
     h('div', { class: 'brand' }, h('span', { class: 'brand-logo' }), h('span', { class: 'nav-label' }, h('span', { class: 'brand-b' }, 'Couch'), h('span', { class: 'brand-a' }, 'mates'))),
-    ...TABS().map(([id, text]) => item(id === 'live' ? 'tv' : id, text.replace(/\s*●\d+$/, ''), { selected: app.tab === id, onclick: () => setTab(id), badge: id === 'favorites' && newFav ? `●${newFav}` : null })),
     item('search', tr('Sök', 'Search'), { selected: app.tab === 'search', onclick: () => setTab('search') }),
+    ...TABS().map(([id, text]) => item(id === 'live' ? 'tv' : id, text.replace(/\s*●\d+$/, ''), { selected: app.tab === id, onclick: () => setTab(id), badge: id === 'favorites' && newFav ? `●${newFav}` : null })),
     item('settings', tr('Inställningar', 'Settings'), { onclick: () => showLogin() }),
     h('div', { class: 'spacer' }),
     media && item('play', media.title, { onclick: openPlayer, sub: tr('Nu spelas', 'Now playing'), cls: 'nowplaying' }),
