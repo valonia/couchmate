@@ -289,6 +289,8 @@ function onState(st) {
   const key = st.media ? `${st.media.type}:${st.media.id}` : null;
   // När någon startar något nytt hoppar alla in i spelaren.
   if (key && key !== prevKey) openPlayer();
+  // Startar man själv något som redan spelas – hoppa in i spelaren ändå.
+  else if (key && st.version !== prevVersion && st.action === 'load' && st.changedBy === app.name && app.view !== 'player') openPlayer();
   else if (!key && app.view === 'player') closePlayer();
   renderTop();
   if (app.view === 'browse') liveView?.refreshPlaying();
