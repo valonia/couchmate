@@ -424,8 +424,17 @@ const server = http.createServer(async (req, res) => {
         return json(res, 502, { error: e.message });
       }
     }
+    // Kvaliteter för en ström (för spelare som inte kan välja själva, t.ex. VLC).
+    if ((m = p.match(/^\/api\/sources\/([a-z0-9_-]{1,64})\/qualities$/))) {
+      try {
+        const { variants } = await sourcePlaylist(m[1], str(url.searchParams.get('id')).slice(0, 128));
+        return json(res, 200, variants.map(({ id, name, height }) => ({ id, name, height })));
+      } catch (e) {
+        return json(res, 502, { error: e.message });
+      }
+    }
     if ((m = p.match(/^\/stream\/plugin\/([a-z0-9_-]{1,64})\/([A-Za-z0-9_.:%-]{1,200})\.m3u8$/))) {
-      return pluginStream(res, m[1], decodeURIComponent(m[2]));
+      return pluginStream(res, m[1], decodeURIComponent(m[2]), str(url.searchParams.get('quality')).slice(0, 40));
     }
     // Sammanslagen tablå för Dispatcharr: originalet först, reservkällan fyller luckorna.
     if (p === '/epg/merged.xml' || p === '/epg/merged.xml.gz') {
@@ -603,6 +612,7 @@ function mutate(by, action, fn) {
   broadcastState();
   checkReady();
   saveRoom();
+  updateChat();
   plugins.emit(action, { by, media: state.media, state: { ...state } });
   plugins.emit('state', { by, action, state: { ...state } });
 }
@@ -642,6 +652,7 @@ function sanitizeMedia(m) {
       icon: /^https:\/\//.test(str(m.icon)) ? clean(m.icon, 1000) : null, categoryId: null, seriesId: null,
     };
     media.url = `/stream/plugin/${mm[1]}/${encodeURIComponent(mm[2])}.m3u8` + (cfg.pin ? `?pin=${encodeURIComponent(cfg.pin)}` : '');
+    media.chat = media.live && plugins.hasChat(mm[1]);
     return media;
   }
   if (!m || !['live', 'movie', 'episode'].includes(m.type)) return null;
@@ -679,6 +690,13 @@ function handle(c, msg) {
 
     case 'ping':
       send(c.ws, { type: 'pong', t: msg.t, s: now() });
+      break;
+
+    case 'chat_sub':
+      // Klienten vill visa chatten (t.ex. Twitch) – skicka det senaste direkt.
+      c.chat = !!msg.on;
+      if (c.chat) send(c.ws, { type: 'chat', key: chatRelay?.key || null, reset: true, messages: chatRelay?.buf || [] });
+      updateChat();
       break;
 
     case 'watching':
@@ -907,6 +925,7 @@ server.on('upgrade', (req, socket, head) => {
     });
     ws.on('close', () => {
       clients.delete(ws);
+      updateChat();
       if (c.name) {
         console.log(`[rum] ${c.name} lämnade`);
         plugins.emit('member_leave', { id: c.id, name: c.name, device: c.device });
@@ -1135,32 +1154,117 @@ async function resolveSource(source, item, fresh = false) {
   return u;
 }
 
-/** Hämtar källans HLS-spellista och skickar den vidare med fullständiga adresser. */
-async function pluginStream(res, source, item) {
+/** Läser ett attribut ur en HLS-rad, t.ex. RESOLUTION=1280x720 eller NAME="720p60". */
+function hlsAttr(line, key) {
+  const m = new RegExp(`[:,]${key}=(?:"([^"]*)"|([^,]*))`).exec(line);
+  return m ? (m[1] ?? m[2]) : undefined;
+}
+
+/**
+ * Hämtar källans HLS-spellista med fullständiga adresser och listar dess kvaliteter
+ * (varianter): id t.ex. "720p60", namn från spellistan (t.ex. "1080p60 (source)").
+ */
+async function sourcePlaylist(source, item) {
+  if (!/^[A-Za-z0-9_.:-]{1,128}$/.test(item)) throw new Error('Ogiltigt id');
+  let upstream = await resolveSource(source, item);
+  let r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
+  if (!r.ok) {
+    // Adressen har troligen gått ut – hämta en ny.
+    upstream = await resolveSource(source, item, true);
+    r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
+  }
+  if (!r.ok) throw new Error(`strömmen svarade ${r.status}`);
+  const base = r.url || upstream;
+  const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
+  const lines = (await r.text()).split('\n').map((line) => {
+    const t = line.trim();
+    if (!t) return line;
+    if (!t.startsWith('#')) return abs(t);
+    return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${abs(u)}"`);
+  });
+  const groupNames = {};
+  for (const l of lines) if (l.startsWith('#EXT-X-MEDIA:') && hlsAttr(l, 'TYPE') === 'VIDEO') groupNames[hlsAttr(l, 'GROUP-ID')] = hlsAttr(l, 'NAME');
+  const variants = [];
+  lines.forEach((l, i) => {
+    if (!l.startsWith('#EXT-X-STREAM-INF:')) return;
+    const height = Number((hlsAttr(l, 'RESOLUTION') || '').split('x')[1]) || 0;
+    const fps = Number(hlsAttr(l, 'FRAME-RATE')) || 0;
+    const id = height ? `${height}p${fps >= 49 ? Math.round(fps) : ''}` : 'audio';
+    const dup = variants.some((v) => v.id === id);
+    let name = groupNames[hlsAttr(l, 'VIDEO')] || (height ? id : 'audio_only');
+    if (name === 'audio_only') name = 'Endast ljud';
+    name = name.replace(/\(source\)/i, '(original)');
+    variants.push({ id, name, height, line: i, dup });
+  });
+  return { lines, variants: variants.filter((v) => !v.dup).sort((a, b) => b.height - a.height), all: variants };
+}
+
+/** Skickar källans HLS-spellista vidare. Med quality: bara den varianten (för VLC som inte kan välja själv). */
+async function pluginStream(res, source, item, quality = '') {
   try {
-    let upstream = await resolveSource(source, item);
-    let r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
-    if (!r.ok) {
-      // Adressen har troligen gått ut – hämta en ny.
-      upstream = await resolveSource(source, item, true);
-      r = await fetch(upstream, { signal: AbortSignal.timeout(15000) });
+    const { lines, variants, all } = await sourcePlaylist(source, item);
+    const pick = quality && variants.find((v) => v.id === quality);
+    let out = lines;
+    if (pick) {
+      // Ta bort de andra varianterna (STREAM-INF-raden + adressraden efter).
+      const drop = new Set();
+      for (const v of all) if (v.line !== pick.line) { drop.add(v.line); drop.add(v.line + 1); }
+      out = lines.filter((_, i) => !drop.has(i));
     }
-    if (!r.ok) throw new Error(`strömmen svarade ${r.status}`);
-    const base = r.url || upstream;
-    const abs = (u) => { try { return new URL(u, base).href; } catch { return u; } };
-    const body = (await r.text()).split('\n').map((line) => {
-      const t = line.trim();
-      if (!t) return line;
-      if (!t.startsWith('#')) return abs(t);
-      return line.replace(/URI="([^"]+)"/g, (_, u) => `URI="${abs(u)}"`);
-    }).join('\n');
     res.writeHead(200, { 'content-type': 'application/vnd.apple.mpegurl', 'cache-control': 'no-store' });
-    res.end(body);
+    res.end(out.join('\n'));
   } catch (e) {
     console.warn(`[källa] ${source}:${item} – ${e.message}`);
     json(res, 502, { error: e.message });
   }
 }
+
+// ---------------------------------------------------------------- Livechatt från källor
+// Chatten hämtas bara när en livestream med chatt spelas OCH någon visar den. Meddelanden
+// samlas ihop och skickas till de som visar chatten ungefär varje sekund.
+
+let chatRelay = null; // { key, buf, pending, stop }
+
+/** Namnfärg som syns mot mörk bakgrund: för mörka färger blandas in vitt. */
+function readableColor(c) {
+  if (!/^#[0-9a-fA-F]{6}$/.test(c)) return null;
+  let [r, g, b] = [1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16));
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  if (lum < 0.5) {
+    const k = (0.5 - lum) / (1 - lum) + 0.15;
+    [r, g, b] = [r, g, b].map((v) => Math.round(v + (255 - v) * Math.min(1, k)));
+  }
+  return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+function updateChat() {
+  const m = state.media;
+  const want = m?.type === 'plugin' && m.chat && [...clients.values()].some((c) => c.chat) ? m.id : null;
+  if ((chatRelay?.key || null) === want) return;
+  if (chatRelay) { try { chatRelay.stop?.(); } catch { /* redan stängd */ } chatRelay = null; }
+  for (const c of clients.values()) if (c.chat) send(c.ws, { type: 'chat', key: want, reset: true, messages: [] });
+  if (!want) return;
+  const relay = chatRelay = { key: want, buf: [], pending: [], stop: null };
+  const item = want.slice(m.source.length + 1);
+  plugins.startChat(m.source, item, (msg) => {
+    if (chatRelay !== relay) return;
+    const text = clean(msg?.text, 500);
+    if (!text) return;
+    const out = { user: clean(msg.user, 40) || '?', color: readableColor(str(msg.color)), text };
+    relay.buf.push(out);
+    if (relay.buf.length > 60) relay.buf.shift();
+    relay.pending.push(out);
+    if (relay.pending.length > 200) relay.pending.splice(0, relay.pending.length - 200);
+  }).then((stop) => {
+    if (chatRelay === relay) relay.stop = stop; else stop();
+  }).catch((e) => console.warn(`[chatt] ${want}: ${e.message}`));
+}
+
+setInterval(() => {
+  if (!chatRelay?.pending.length) return;
+  const messages = chatRelay.pending.splice(0).slice(-40);
+  for (const c of clients.values()) if (c.chat) send(c.ws, { type: 'chat', key: chatRelay.key, messages });
+}, 800);
 
 // ---------------------------------------------------------------- Påminnelser
 

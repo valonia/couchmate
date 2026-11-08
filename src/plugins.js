@@ -23,6 +23,7 @@
 //     browse: async () => ({ sections: [{ id, title, items: [item, …] }] }),
 //     search: async (q) => [item, …],
 //     resolve: async (itemId) => ({ url: 'https://…/playlist.m3u8' }),   // HLS-ström att spela
+//     chat: (itemId, onMessage) => stop,   // valfritt: livechatt, onMessage({ user, color, text }); returnerar stoppfunktion
 //   });
 //   item = { id, title, subtitle, image, live: true/false, viewers }
 // OBS: plugins kör med samma rättigheter som servern – installera bara sådana du litar på.
@@ -253,7 +254,20 @@ export class PluginHost {
   sources() {
     return [...this.plugins.values()]
       .filter((p) => p.enabled && p.source)
-      .map((p) => ({ id: p.id, name: p.source.name || p.meta?.name || p.id, iconPath: p.source.iconPath || null }));
+      .map((p) => ({ id: p.id, name: p.source.name || p.meta?.name || p.id, iconPath: p.source.iconPath || null, chat: typeof p.source.chat === 'function' }));
+  }
+
+  /** Har källan livechatt? */
+  hasChat(id) {
+    const p = this.plugins.get(id);
+    return Boolean(p?.enabled && typeof p.source?.chat === 'function');
+  }
+
+  /** Startar källans chatt för ett objekt. Returnerar en stoppfunktion. */
+  async startChat(id, item, onMessage) {
+    if (!this.hasChat(id)) throw new Error('Källan har ingen chatt');
+    const stop = await this.plugins.get(id).source.chat(item, onMessage);
+    return typeof stop === 'function' ? stop : () => {};
   }
 
   /** Anropar en källas funktion (browse/search/resolve) med tidsgräns. */

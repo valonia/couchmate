@@ -8,6 +8,7 @@
 
 const GQL = 'https://gql.twitch.tv/gql';
 const USHER = 'https://usher.ttvnw.net/api/channel/hls';
+const CHAT = 'wss://irc-ws.chat.twitch.tv:443';
 const LOGO = 'M11.64 5.93h1.43v4.28h-1.43m3.93-4.28H17v4.28h-1.43M7 2 3.43 5.57v12.86h4.28V22l3.58-3.57h2.85L20.57 12V2m-1.43 9.29-2.85 2.85h-2.86l-2.5 2.5v-2.5H7.71V3.43h11.43z';
 
 export const meta = {
@@ -20,6 +21,7 @@ export const meta = {
 };
 
 export default function setup(api) {
+  const open = new Set(); // öppna chattar (stoppfunktioner)
   const clientId = () => api.settings.clientId || 'kimne78kx3ncx6brgo4mv6wki5h1ko';
 
   async function gql(query, variables = {}) {
@@ -116,5 +118,57 @@ export default function setup(api) {
       });
       return { url: `${USHER}/${login.toLowerCase()}.m3u8?${qs}` };
     },
+
+    /** Livechatt: läser kanalens chatt anonymt (bara läsning, inget konto). */
+    chat(login, onMessage) {
+      if (!/^[A-Za-z0-9_]{1,40}$/.test(login)) throw new Error('Ogiltigt kanalnamn');
+      const chan = login.toLowerCase();
+      let ws = null;
+      let stopped = false;
+      let retry = null;
+      let wait = 2000;
+      const connect = () => {
+        ws = new WebSocket(CHAT);
+        ws.onopen = () => {
+          wait = 2000;
+          ws.send('CAP REQ :twitch.tv/tags');
+          ws.send('PASS SCHMOOPIIE');
+          ws.send(`NICK justinfan${10000 + Math.floor(Math.random() * 80000)}`);
+          ws.send(`JOIN #${chan}`);
+        };
+        ws.onmessage = (ev) => {
+          for (const line of String(ev.data).split('\r\n')) {
+            if (!line) continue;
+            if (line.startsWith('PING')) { ws.send(line.replace('PING', 'PONG')); continue; }
+            const m = /^(?:@(\S+) )?:([^!\s]+)!\S+ PRIVMSG #\S+ :(.*)$/.exec(line);
+            if (!m) continue;
+            const tags = Object.fromEntries((m[1] || '').split(';').map((kv) => { const i = kv.indexOf('='); return [kv.slice(0, i), kv.slice(i + 1)]; }));
+            let text = m[3];
+            const action = /^\u0001ACTION (.*)\u0001$/.exec(text);
+            if (action) text = action[1];
+            const user = (tags['display-name'] || m[2]).replace(/\s/g, ' ');
+            onMessage({ user, color: tags.color || null, text });
+          }
+        };
+        ws.onclose = () => {
+          if (stopped) return;
+          retry = setTimeout(connect, wait);
+          wait = Math.min(wait * 2, 60000);
+        };
+        ws.onerror = () => { /* onclose kommer efteråt */ };
+      };
+      connect();
+      const stop = () => {
+        stopped = true;
+        clearTimeout(retry);
+        try { ws?.close(); } catch { /* redan stängd */ }
+        open.delete(stop);
+      };
+      open.add(stop);
+      return stop;
+    },
   });
+
+  // Stäng alla chattar när pluginet stängs av.
+  return () => { for (const stop of [...open]) stop(); };
 }
