@@ -1,7 +1,7 @@
 {
   "id": "iptv",
   "name": "IPTV",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Live TV with a programme guide, movies and series from Dispatcharr (Xtream). Search, reminders, the next episode and a merged programme guide.",
   "main": "index.mjs",
   "requires": "Dispatcharr (https://github.com/Dispatcharr/Dispatcharr), reachable from the Couchmate server, with an Xtream user.",

@@ -76,6 +76,7 @@ plugins.onChange(() => {
 
 // A corrected translation: the apps drop what they kept for that language and fetch it again.
 translator.onChange((lang) => room.broadcast({ type: 'translations_changed', lang }));
+translator.onTranslated((lang) => room.textsTranslated(lang));
 
 const admin = createAdmin({
   dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, translator, version: VERSION,

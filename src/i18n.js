@@ -27,6 +27,7 @@ export class Translator {
     // Translations corrected in the admin panel – they win over the engine and are never overwritten.
     this.manual = new JsonFile(path.join(path.dirname(file), 'translations-manual.json'), {}, { delay: 0 });
     this.listeners = [];
+    this.translatedListeners = [];
     this.engine = engine;
     this.enabled = enabled;
     this.log = log;
@@ -45,6 +46,9 @@ export class Translator {
   cached(text, lang) { return this.manual.data[lang]?.[text] ?? this.store.data[lang]?.[text]; }
 
   onChange(fn) { this.listeners.push(fn); }
+
+  /** New machine translations are ready for a language (so screens shown in English can be sent again). */
+  onTranslated(fn) { this.translatedListeners.push(fn); }
 
   /** For the admin panel: every translated text per language, and which ones were corrected by hand. */
   forAdmin() {
@@ -98,6 +102,7 @@ export class Translator {
           const dict = (this.store.data[lang] ||= {});
           texts.forEach((t, i) => { if (typeof out[i] === 'string' && out[i].trim()) dict[t] = out[i]; });
           this.store.save();
+          for (const fn of this.translatedListeners) { try { fn(lang); } catch { /* listener gone */ } }
         } catch (e) {
           this.log(`[translate] ${lang}: ${e.message}`);
         }

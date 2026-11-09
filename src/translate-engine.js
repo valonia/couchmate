@@ -95,9 +95,20 @@ async function translateParts(translator, prefix, text) {
  * Translates one UI text. Placeholders like {n} are swapped for numbers the model leaves alone, and text in
  * CAPITALS is translated in normal case and put back in capitals (models handle "ON NOW" badly).
  */
+// Placeholders become something the model treats naturally: numbers for counts, first names for everything else
+// ("{name} paused the video" → "Anna paused the video" → "Anna gjorde en paus i videon" → "{name} gjorde …").
+const NUMERIC = new Set(['n', 'm', 'h', 's', 'count', 'code', 'version', 'number']);
+const PEOPLE = ['Anna', 'Erik', 'Maria', 'Johan', 'Sara', 'Lars'];
+
 async function translateOne(translator, prefix, text) {
   const names = [];
-  let src = text.replace(/\{(\w+)\}/g, (_, name) => { names.push(name); return String(7301 + names.length - 1); });
+  const tokens = [];
+  let src = text.replace(/\{(\w+)\}/g, (_, name) => {
+    const token = NUMERIC.has(name) ? String(7301 + tokens.length) : PEOPLE[tokens.length % PEOPLE.length];
+    names.push(name);
+    tokens.push(token);
+    return token;
+  });
   const upper = /[A-Z]/.test(src) && src === src.toUpperCase();
   if (upper) src = src.charAt(0) + src.slice(1).toLowerCase();
   // Keep leading/trailing spaces and symbols such as "→" or "·" out of the model's way.
@@ -124,8 +135,15 @@ async function translateOne(translator, prefix, text) {
   if (!/[.!?…]$/.test(core)) t = t.replace(/[.!?]+$/, '');
   t = lead + t.replace(/[.…]+$/, (m) => (trail.trim() ? '' : m)) + (trail.trim() ? trail.trim() : trail);
   if (upper) t = t.toUpperCase();
-  names.forEach((name, i) => { t = t.split(String(7301 + i)).join(`{${name}}`); });
-  // A placeholder the model dropped: fall back to English rather than lose the value.
+  names.forEach((name, i) => { t = t.split(upper ? tokens[i].toUpperCase() : tokens[i]).join(`{${name}}`); });
+  // A placeholder the model dropped, or digits that were not in the English (e.g. "/50"): keep the English.
   if (names.some((name) => !t.includes(`{${name}}`))) return text;
+  const digits = (x) => (x.replace(/\{\w+\}/g, '').match(/\d+/g) || []).join(',');
+  if (digits(t) && digits(t) !== digits(text)) return text;
+  // Keep the English's first letter case ("hide chat" → "dölj chatt", not "Dölj chatt").
+  const first = text.trimStart().charAt(0);
+  if (first && first === first.toLowerCase() && first !== first.toUpperCase()) {
+    t = t.replace(/^(\s*)(\S)/, (_, sp, c) => sp + c.toLowerCase());
+  }
   return t;
 }

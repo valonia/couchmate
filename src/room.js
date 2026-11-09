@@ -424,6 +424,21 @@ export class Room {
     return false;
   }
 
+  /**
+   * New translations are ready for [lang]: the devices with that language get the room's state again and are
+   * told to fetch their menu and open view again (all of it was sent in English while it was being translated).
+   */
+  textsTranslated(lang) {
+    clearTimeout(this.textsTimers?.[lang]);
+    (this.textsTimers ||= {})[lang] = setTimeout(() => {
+      for (const c of this.clients.values()) {
+        if (c.lang !== lang) continue;
+        this.send(c, this.stateMsg());
+        this.send(c, { type: 'texts_changed' });
+      }
+    }, 700);
+  }
+
   /** Every app disconnects (e.g. the PIN changed) and has to log in again. */
   disconnectAll(code, reason) {
     for (const ws of this.clients.keys()) ws.close(code, reason);

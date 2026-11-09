@@ -103,7 +103,7 @@ function guideColumn(t) {
       },
       { type: 'spacer', height: 8 },
       { type: 'text', text: t('→  guide   ·   OK on a programme  –  reminder'), style: 'faint', size: 13 },
-      { type: 'text', text: t('OK on a channel  –  watch   ·   Hold OK  –  favorite'), style: 'faint', size: 13 },
+      { type: 'text', text: t('OK on a channel  –  play   ·   Hold OK  –  favorite'), style: 'faint', size: 13 },
     ],
   };
 }
