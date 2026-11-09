@@ -200,3 +200,12 @@ body.dl .howto b { color: var(--text); }
 .tr-table td:first-child { color: var(--dim); width: 45%; }
 .tr-table input { width: 100%; }
 .tr-table tr.fixed td:first-child { color: var(--gold); }
+
+/* ---------- popups */
+.modal-back { position: fixed; inset: 0; z-index: 50; background: rgba(0, 0, 0, .6); display: grid; place-items: center; padding: 24px; }
+.modal { width: min(640px, 100%); max-height: calc(100vh - 48px); display: flex; flex-direction: column; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 20px 60px rgba(0, 0, 0, .5); }
+.modal-head { display: flex; align-items: center; gap: 12px; padding: 18px 20px 6px; }
+.modal-head h3 { margin: 0; flex: 1; font: 700 20px var(--display); }
+.modal-body { padding: 10px 20px; overflow: auto; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--line); }
+.btn svg { width: 16px; height: 16px; }

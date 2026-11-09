@@ -99,6 +99,22 @@ function confirmBtn(label, confirmLabel, onConfirm, cls = 'btn danger small') {
   return b;
 }
 
+/** A popup on top of the page. Esc, the backdrop or the returned function closes it. */
+function modal(title, body, actions = []) {
+  const back = h('div', { class: 'modal-back' });
+  const close = () => { back.remove(); document.removeEventListener('keydown', onKey); };
+  const onKey = (e) => { if (e.key === 'Escape') close(); };
+  back.addEventListener('mousedown', (e) => { if (e.target === back) close(); });
+  document.addEventListener('keydown', onKey);
+  fill(back, h('div', { class: 'modal', role: 'dialog', 'aria-modal': 'true', 'aria-label': title },
+    h('div', { class: 'modal-head' }, h('h3', {}, title), h('button', { class: 'btn small', type: 'button', 'aria-label': 'Close', onclick: close }, '✕')),
+    h('div', { class: 'modal-body' }, body),
+    actions.length ? h('div', { class: 'modal-foot' }, actions) : null));
+  document.body.append(back);
+  back.querySelector('input, select, textarea')?.focus();
+  return close;
+}
+
 // ---------------------------------------------------------------- login
 
 async function start() {
@@ -337,15 +353,23 @@ async function renderPlugins(main) {
       toast(`${p.name} switched ${toggle.checked ? 'on' : 'off'}`);
       renderList();
     }));
-    const inputs = {};
-    const settingsForm = p.settings.length ? h('form', { class: 'form', onsubmit: run(async (e) => {
-      e.preventDefault();
-      const body = {};
-      for (const s of p.settings) { const v = inputs[s.key](); if (s.type === 'secret' && !v) continue; body[s.key] = v; }
-      d = await api(`/plugins/${p.id}/settings`, { method: 'PUT', body });
-      toast('Settings saved');
-      renderList();
-    }) }, p.settings.map((s) => settingField(`p-${p.id}`, s, inputs)), h('div', {}, h('button', { class: 'btn primary small', type: 'submit' }, 'Save settings'))) : null;
+    // The plugin's settings open in a popup.
+    const openSettings = () => {
+      const inputs = {};
+      const form = h('form', { class: 'form', onsubmit: run(async (e) => {
+        e.preventDefault();
+        const body = {};
+        for (const s of p.settings) { const v = inputs[s.key](); if (s.type === 'secret' && !v) continue; body[s.key] = v; }
+        d = await api(`/plugins/${p.id}/settings`, { method: 'PUT', body });
+        toast('Settings saved');
+        close();
+        renderList();
+      }) }, p.settings.map((s) => settingField(`p-${p.id}`, s, inputs)));
+      const close = modal(`${p.name} settings`, form, [
+        h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Cancel'),
+        h('button', { class: 'btn primary', type: 'button', onclick: () => form.requestSubmit() }, 'Save'),
+      ]);
+    };
     const missing = p.settings.some((s) => s.required && (s.type === 'secret' ? !s.isSet : !s.value));
     return h('section', { class: 'card plugin' },
       h('div', { class: 'top' },
@@ -359,13 +383,14 @@ async function renderPlugins(main) {
             p.links.map((l) => h('a', { href: l.url, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, `${l.label} ↗`))) : null),
         h('label', { class: 'switch' }, toggle, h('span', {}))),
       p.error && h('p', { class: 'error', style: { margin: 0 } }, `Error: ${p.error}`),
-      missing && h('p', { class: 'notice', style: { margin: 0 } }, 'Fill in the settings below before using this plugin.'),
-      settingsForm && h('details', { open: missing }, h('summary', {}, 'Settings'), h('div', { style: { marginTop: '12px' } }, settingsForm)),
-      h('div', { class: 'row' }, confirmBtn('Remove plugin', 'Click again to remove', async () => {
-        d = await api(`/plugins/${p.id}`, { method: 'DELETE' });
-        toast(`${p.name} removed`);
-        renderList();
-      })));
+      missing && h('p', { class: 'notice', style: { margin: 0 } }, 'Fill in the settings before using this plugin.'),
+      h('div', { class: 'row' },
+        p.settings.length ? h('button', { class: `btn small ${missing ? 'primary' : ''}`, onclick: openSettings }, icon('settings'), 'Settings') : null,
+        confirmBtn('Remove plugin', 'Click again to remove', async () => {
+          d = await api(`/plugins/${p.id}`, { method: 'DELETE' });
+          toast(`${p.name} removed`);
+          renderList();
+        })));
   }
 
   function renderList() {
