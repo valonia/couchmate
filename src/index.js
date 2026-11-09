@@ -20,6 +20,7 @@ import { PluginHost } from './plugins.js';
 import { Streams } from './streams.js';
 import { Room } from './room.js';
 import { Translator } from './i18n.js';
+import { createEngine } from './translate-engine.js';
 import { MenuLayout } from './menu.js';
 import { createAdmin } from './admin.js';
 import { json, readJson, clean, str, SAFE_ID } from './util.js';
@@ -49,9 +50,10 @@ const favorites = new Favorites(path.join(cfg.dataDir, 'favorites.json'));
 const reminders = new Reminders(path.join(cfg.dataDir, 'reminders.json'));
 const menuLayout = new MenuLayout(path.join(cfg.dataDir, 'menu.json'));
 const translator = new Translator(path.join(cfg.dataDir, 'translations.json'), {
-  engine: null, // the translation engine is plugged in here (see i18n.js)
+  engine: null, // set below once the translation engine has started
   enabled: () => Boolean(settings.get('translation')),
 });
+createEngine({ dataDir: cfg.dataDir }).then((engine) => { translator.engine = engine; }).catch((e) => console.warn('[translate]', e.message));
 
 // The room and the plugins need each other: plugins control the room, the room plays from plugins.
 const roomApi = {};
@@ -72,8 +74,11 @@ plugins.onChange(() => {
   room.broadcast({ type: 'menu_changed' }); // the apps reload their menu straight away
 });
 
+// A corrected translation: the apps drop what they kept for that language and fetch it again.
+translator.onChange((lang) => room.broadcast({ type: 'translations_changed', lang }));
+
 const admin = createAdmin({
-  dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, version: VERSION,
+  dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, translator, version: VERSION,
   menuChanged: () => room.broadcast({ type: 'menu_changed' }),
 });
 

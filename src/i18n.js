@@ -8,6 +8,7 @@
 // Translations are cached in data/translations.json per language, so each text is translated once and
 // then shared by every device. Until a translation is ready, the English text is used.
 
+import path from 'node:path';
 import { JsonFile } from './util.js';
 
 export const T = '$t';
@@ -23,6 +24,9 @@ export class Translator {
    */
   constructor(file, { engine = null, enabled = () => true, log = console.log } = {}) {
     this.store = new JsonFile(file, {}, { delay: 3000 });
+    // Translations corrected in the admin panel – they win over the engine and are never overwritten.
+    this.manual = new JsonFile(path.join(path.dirname(file), 'translations-manual.json'), {}, { delay: 0 });
+    this.listeners = [];
     this.engine = engine;
     this.enabled = enabled;
     this.log = log;
@@ -38,7 +42,35 @@ export class Translator {
     return base === 'en' ? null : base;
   }
 
-  cached(text, lang) { return this.store.data[lang]?.[text]; }
+  cached(text, lang) { return this.manual.data[lang]?.[text] ?? this.store.data[lang]?.[text]; }
+
+  onChange(fn) { this.listeners.push(fn); }
+
+  /** For the admin panel: every translated text per language, and which ones were corrected by hand. */
+  forAdmin() {
+    const langs = [...new Set([...Object.keys(this.store.data), ...Object.keys(this.manual.data)])].sort();
+    return langs.map((lang) => {
+      const auto = this.store.data[lang] || {};
+      const fixed = this.manual.data[lang] || {};
+      const texts = [...new Set([...Object.keys(auto), ...Object.keys(fixed)])].sort((a, b) => a.localeCompare(b));
+      return { lang, entries: texts.map((text) => ({ text, translation: fixed[text] ?? auto[text] ?? '', machine: auto[text] ?? null, manual: text in fixed })) };
+    });
+  }
+
+  /** Corrects one translation (an empty one goes back to the engine's). The apps are told to fetch it again. */
+  correct(lang, text, translation) {
+    if (!Translator.normalize(lang) || typeof text !== 'string' || !text) throw new Error('Invalid translation');
+    const dict = (this.manual.data[lang] ||= {});
+    const t = String(translation ?? '').trim().slice(0, 1000);
+    if (t) dict[text] = t; else delete dict[text];
+    this.manual.flush();
+    for (const fn of this.listeners) { try { fn(lang); } catch { /* listener gone */ } }
+  }
+
+  /** A device connected with this language – get its model ready. */
+  prepare(lang) {
+    if (lang && this.engine && this.enabled()) this.engine.prepare?.(lang);
+  }
 
   /** The translation if it is ready; otherwise English now and a translation in the background. */
   translate(text, lang) {

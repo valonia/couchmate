@@ -195,3 +195,8 @@ body.dl .howto b { color: var(--text); }
 .menu-row .arrows { display: flex; gap: 4px; }
 .menu-row .arrows .btn { padding: 4px 10px; }
 .menu-row .arrows .btn:disabled { opacity: .3; cursor: default; }
+
+/* ---------- translations */
+.tr-table td:first-child { color: var(--dim); width: 45%; }
+.tr-table input { width: 100%; }
+.tr-table tr.fixed td:first-child { color: var(--gold); }

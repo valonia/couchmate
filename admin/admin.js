@@ -23,6 +23,7 @@ const ICONS = {
   data: 'M12 3C7.58 3 4 4.79 4 7v10c0 2.21 3.59 4 8 4s8-1.79 8-4V7c0-2.21-3.58-4-8-4zm0 2c3.87 0 6 1.5 6 2s-2.13 2-6 2-6-1.5-6-2 2.13-2 6-2zm6 12c0 .5-2.13 2-6 2s-6-1.5-6-2v-2.23c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V17zm0-5c0 .5-2.13 2-6 2s-6-1.5-6-2V9.77c1.61.78 3.72 1.23 6 1.23s4.39-.45 6-1.23V12z',
   downloads: 'M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z',
   menu: 'M3 18h18v-2H3v2zm0-5h18v-2H3v2zm0-7v2h18V6H3z',
+  translations: 'M12.87 15.07l-2.54-2.51.03-.03A17.52 17.52 0 0 0 14.07 6H17V4h-7V2H8v2H1v2h11.17C11.5 7.92 10.44 9.75 9 11.35 8.07 10.32 7.3 9.19 6.69 8h-2c.73 1.63 1.73 3.17 2.98 4.56l-5.09 5.02L4 19l5-5 3.11 3.11.76-2.04zM18.5 10h-2L12 22h2l1.12-3h4.75L21 22h2l-4.5-12zm-2.62 7l1.62-4.33L19.12 17h-3.24z',
   plugins: 'M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v3.8h1.5a2.7 2.7 0 0 1 0 5.4H2V20a2 2 0 0 0 2 2h3.8v-1.5a2.7 2.7 0 0 1 5.4 0V22H17a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z',
   logs: 'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z',
   account: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z',
@@ -140,6 +141,7 @@ const PAGES = [
   ['settings', 'Settings', renderSettings],
   ['plugins', 'Plugins', renderPlugins],
   ['menu', 'App menu', renderMenu],
+  ['translations', 'Translations', renderTranslations],
   ['data', 'Reminders and data', renderData],
   ['downloads', 'Downloads', renderDownloads],
   ['logs', 'Log', renderLogs],
@@ -428,6 +430,55 @@ async function renderMenu(main) {
       fixed('Settings'));
   }
   fill(main, head('App menu', 'The order of the menu in the apps. Search is always at the top and Settings always at the bottom. Switch an entry off to hide it. Plugins hide entries themselves when they have nothing to show.'), list);
+  draw();
+}
+
+// ---------------------------------------------------------------- translations
+
+let trLang = null;
+async function renderTranslations(main) {
+  let langs = (await api('/translations')).languages;
+  const names = new Intl.DisplayNames(['en'], { type: 'language' });
+  const langName = (code) => { try { return names.of(code); } catch { return code; } };
+  if (!langs.some((l) => l.lang === trLang)) trLang = langs[0]?.lang || null;
+  const list = h('section', { class: 'card' });
+  const filter = h('input', { type: 'text', placeholder: 'Filter, e.g. "history"', style: { maxWidth: '320px' }, 'aria-label': 'Filter the translations' });
+  const select = h('select', { 'aria-label': 'Language', style: { width: 'auto' } });
+  const onlyFixed = h('input', { type: 'checkbox', id: 'only-fixed' });
+
+  function draw() {
+    fill(select, langs.map((l) => h('option', { value: l.lang, selected: l.lang === trLang }, `${langName(l.lang)} (${l.lang}) · ${l.entries.length}`)));
+    const lang = langs.find((l) => l.lang === trLang);
+    if (!lang) { fill(list, h('p', { class: 'empty' }, 'Nothing translated yet. Texts are translated when a device with that language uses the apps.')); return; }
+    const q = filter.value.trim().toLowerCase();
+    const rows = lang.entries.filter((e) => (!onlyFixed.checked || e.manual) && (!q || e.text.toLowerCase().includes(q) || e.translation.toLowerCase().includes(q)));
+    fill(list, h('div', { class: 'table-wrap' }, h('table', { class: 'tr-table' },
+      h('thead', {}, h('tr', {}, h('th', {}, 'English'), h('th', {}, langName(lang.lang)), h('th', {}))),
+      h('tbody', {}, rows.slice(0, 500).map((e) => {
+        const input = h('input', { type: 'text', value: e.translation, 'aria-label': `Translation of ${e.text}` });
+        input.addEventListener('change', run(async () => {
+          langs = (await api('/translations', { method: 'PUT', body: { lang: lang.lang, text: e.text, translation: input.value } })).languages;
+          toast('Saved – the apps update straight away');
+          draw();
+        }));
+        return h('tr', { class: e.manual ? 'fixed' : '' },
+          h('td', {}, e.text),
+          h('td', {}, input, e.manual && e.machine ? h('div', { class: 'faint', style: { fontSize: '12px', marginTop: '3px' } }, `Machine: ${e.machine}`) : null),
+          h('td', { class: 'act' }, e.manual ? h('button', { class: 'btn small', onclick: run(async () => {
+            langs = (await api('/translations', { method: 'PUT', body: { lang: lang.lang, text: e.text, translation: '' } })).languages;
+            toast('Back to the machine translation');
+            draw();
+          }) }, 'Reset') : null));
+      })))),
+      rows.length > 500 ? h('p', { class: 'faint' }, `Showing 500 of ${rows.length} – use the filter.`) : null);
+  }
+  select.addEventListener('change', () => { trLang = select.value; draw(); });
+  filter.addEventListener('input', draw);
+  onlyFixed.addEventListener('change', draw);
+  fill(main,
+    head('Translations', 'Menus and buttons are translated on this server into each device\'s language. Correct a translation here – your corrections are never overwritten and the apps update straight away. Names and titles are never translated.',
+      h('div', { class: 'row' }, select, filter, h('label', { for: 'only-fixed', class: 'row', style: { gap: '6px' } }, onlyFixed, 'Only corrected'))),
+    list);
   draw();
 }
 

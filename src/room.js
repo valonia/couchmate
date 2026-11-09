@@ -229,6 +229,7 @@ export class Room {
         c.name = clean(msg.name, 40) || 'Guest';
         c.device = clean(msg.device, 40);
         c.lang = Translator.normalize(msg.lang);
+        this.translator.prepare(c.lang);
         this.send(c, this.stateMsg());
         this.send(c, { type: 'favorites', favorites: this.favorites.list() });
         this.send(c, { type: 'reminders', reminders: this.reminders.list() });

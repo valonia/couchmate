@@ -1,7 +1,9 @@
-FROM node:22-alpine
+# Debian (not Alpine): the translation engine (onnxruntime) needs glibc.
+FROM node:22-bookworm-slim
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm install --omit=dev && npm cache clean --force
+# The translation engine runs on the CPU: the GPU (CUDA/TensorRT) libraries and other platforms' files are dropped.
+RUN npm install --omit=dev && npm cache clean --force  && cd node_modules/onnxruntime-node/bin/napi-v3  && rm -rf darwin win32 linux/*/libonnxruntime_providers_cuda.so linux/*/libonnxruntime_providers_tensorrt.so
 COPY src ./src
 COPY admin ./admin
 # Plugins that ship with the server (installed from the admin panel with one click).

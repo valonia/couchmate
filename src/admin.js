@@ -204,6 +204,16 @@ export function createAdmin(ctx) {
       return json(res, 200, { entries: ctx.menuLayout.forAdmin(plugins.menu(), names) });
     }
 
+    // ---- translations
+    if (sub === '/translations' && method === 'GET') return json(res, 200, { languages: ctx.translator.forAdmin() });
+    if (sub === '/translations' && method === 'PUT') {
+      const b = await readJson(req);
+      try {
+        ctx.translator.correct(String(b.lang || ''), b.text, b.translation);
+        return json(res, 200, { languages: ctx.translator.forAdmin() });
+      } catch (e) { return json(res, 400, { error: e.message }); }
+    }
+
     // ---- settings
     if (sub === '/settings' && method === 'GET') return json(res, 200, { groups: GROUPS, settings: settings.forAdmin() });
     if (sub === '/settings' && method === 'PUT') {
