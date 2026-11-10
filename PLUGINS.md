@@ -4,8 +4,11 @@ The Couchmate apps are a front end. They play video in sync, and they have searc
 settings and translation built in. **Everything else comes from plugins**: the menu entries, the screens
 behind them, search results, what is played, and how the player looks and reacts to the remote.
 
-A plugin is a folder with a `plugin.json` and a JavaScript module. Zip the folder and upload it in the admin
-panel (**Plugins → Upload plugin**), or put it in `server/plugins/` so that it ships with the server.
+A plugin is a folder with a `plugin.json` and a JavaScript module. The server ships with none: the admin gets
+them from GitHub in the admin panel (**Plugins → Get plugins**). Share yours as a public GitHub repository with
+the plugin's files at the top and a release tagged `v<version>` – anyone can then install it by writing its
+name (`owner/repo`), and it updates from there. While developing, zip the folder and upload it instead
+(**Plugins → Upload plugin**).
 
 > Plugins run with the same rights as the server. Only install plugins you trust.
 
@@ -37,6 +40,8 @@ my-plugin/
   "main": "index.mjs",
   "requires": "Internet access from the server to youtube.com",
   "homepage": "https://example.com/couchmate-youtube",
+  "repository": "your-name/couchmate-youtube",
+  "needs": [{ "id": "other-plugin", "name": "Other plugin", "repository": "someone/couchmate-other" }],
   "settings": [
     { "key": "apiKey", "label": "API key", "type": "secret", "required": true },
     { "key": "region", "label": "Region", "type": "select", "default": "SE", "options": ["SE", "NO", "US"] }
@@ -48,6 +53,13 @@ my-plugin/
 - Setting types: `text`, `secret` (never shown again), `number`, `bool`, `select` (`options` as strings or
   `{ "value", "label" }`). `required: true` reminds the admin to fill it in. Read them with `api.settings.<key>`.
   The plugin is restarted when its settings change.
+- `repository` (optional) – a public GitHub repository (`owner/repo`) with the plugin's files at the top. The
+  server checks its latest release every 6 hours; the admin panel then offers the update, or installs it by
+  itself if the admin switched on **Update automatically** for the plugin. To release: raise `version`, commit,
+  and publish a GitHub release tagged `v<version>` (e.g. `v1.2.0`). Settings and on/off are kept on update.
+- `needs` (optional) – plugins this one builds on (see "Plugins that build on each other"). Installing it from
+  GitHub without them shows a popup in the admin panel that installs them too; its card warns while one is
+  missing or switched off.
 
 ## The module
 
@@ -65,9 +77,12 @@ export default function setup(api) {
     async resolve(itemId, { options }) { /* → where the stream is */ },
     async next(itemId) { /* → the item that plays after this one, or null */ },
     async episodes(itemId) { /* → [{ id, label }] for new-episode alerts */ },
+    async favorite(item) { /* → what to save when someone adds a favourite (null = not allowed) – see "Favourites" */ },
+    async status(itemIds) { /* → { id: { live, title, subtitle, image, viewers } } for favourites, every 2 min */ },
     chat(itemId, onMessage) { /* → stop function */ },
     async action(itemId, actionId, { by }) { /* a button in the player's settings */ },
     player: { /* how the player looks and is controlled */ },
+    favoriteGroups: { /* optional: your own groups on the Favorites screen – see "Favourites" */ },
   });
 
   return () => { /* clean up when the plugin is switched off */ };
@@ -98,7 +113,7 @@ Everything the apps show is an item:
   image: 'https://…',          // https, or /plugins/<id>/… served by your plugin (fetched with the PIN)
   backdrop: 'https://…',
   description: '…',
-  kind: 'movie',              // free text: channel, movie, series, episode, stream, video …
+  kind: 'movie',              // free text: channel, movie, series, episode, stream, video, creator, playlist …
   action: 'play',             // 'play' (default) or 'open'
   view: 'show',               // for action 'open': the view that opens, with params { id }
   live: false,
@@ -106,8 +121,44 @@ Everything the apps show is an item:
   viewers: 3400,
   year: '2008', genre: 'Animation', rating: 7.5, badge: api.t('New'), duration: 596,
   favorite: true,             // false = cannot be added to favourites
+  unavailable: false,         // true = shown greyed out, never played (e.g. a song that was not found)
 }
 ```
+
+### Favourites
+
+Anything with `favorite` not `false` can be added by holding OK (cards, rows, `{ favorite: '{{item}}' }`).
+
+The Favorites screen shows them in groups. Name your own with `favoriteGroups` on the source – one per `kind`:
+
+```js
+api.source({
+  name: 'TikTok',
+  favoriteGroups: {
+    creator: { title: api.t('TikTok creators'), order: 50, style: 'landscape' },
+    video: { title: api.t('TikTok videos') },
+  },
+  …
+});
+```
+
+- `title` – the group's heading (`api.t(…)` to have it translated).
+- `order` – where the group goes (lower first). The usual ones: series 10, movies 20, channels 30, streams 40,
+  creators 50, playlists 60, videos 70, other 99.
+- `style` – `poster` (tall covers, like films), `landscape` (16:9 cards – the default) or `guide` (TV channels:
+  a row with what is on now; needs `data('epg')`).
+
+Leave out what you do not need: a missing `order` or `style` comes from the usual group for that kind. Kinds you
+do not name share the usual groups with other plugins (`series`, `movie`, `channel`, `stream`, `creator`,
+`playlist`, `video`); any other kind goes under "Other". Items with `action: 'open'` open their view from there.
+
+Two optional hooks make favourites better:
+
+- `favorite(item)` – decides what is saved. Return the item to keep (changed or not), or `null` to refuse.
+  Twitch saves the *channel* here, not the stream that happens to be on.
+- `status(ids)` – asked when the server starts, after a favourite is added, and every 2 minutes. Return
+  `{ [id]: { live, title, subtitle, image, viewers } }` (each optional); it is shown over what was saved. Twitch
+  uses it so a favourite channel shows LIVE with the current preview, or its offline picture when it is not live.
 
 ### Views
 
@@ -260,7 +311,7 @@ plays it after the countdown set in the admin panel.
 ```js
 player: {
   // What the remote's buttons do while playing:
-  // pause | settings | chat | info | channels | channel_up | channel_down | seek_back | seek_forward | none
+  // pause | settings | chat | info | channels | channel_up | channel_down | seek_back | seek_forward | queue | none
   keys: { ok: 'pause', up: 'info', down: 'settings', left: 'seek_back', right: 'seek_forward' },
   overlay: { … },   // a view drawn on top of the video – see below
   channels: true,   // you answer data('channels') – enables channel_up/down and the channel list
@@ -281,6 +332,21 @@ player: {
 
 Without `player`, OK pauses, ▼ and ▶ open the settings, ◀ opens the chat, and the panel shows chat,
 quality, audio and subtitles.
+
+#### The queue
+
+Add `queue: true` to `player` and answer `data('queue', { id })` with `{ title, current, items: [item, …] }`
+(`current` = the id playing now). A key with the action `queue` (e.g. `up: 'queue'`) then opens a list to the
+right of the video – where the chat goes – showing what plays next; OK plays the chosen item for everyone.
+When `items` is empty the key shows the overlay instead. The YouTube plugin uses it for playlists.
+
+#### Songs that follow straight on
+
+`upNextBefore: 10` in `player` shows "next" 10 seconds (at most 30) before the end instead of after it. The
+server prepares the next item in advance, the apps buffer it behind the one playing, and when this one ends the
+next starts at once – if every app watching has buffered it. Otherwise everyone waits for each other as usual,
+so nobody misses the start. Back cancels: this one plays to the end and stops.
+Good for music; without it, "next" counts down after the end (for episodes).
 
 #### The overlay
 
@@ -312,16 +378,34 @@ Without an overlay the app shows its own.
 | `api.menuChanged()` | the menu (from a `menu()` function) may have changed – it is fetched again and the apps update |
 | `api.link(label, url)` | a link on the plugin's card in the admin panel, e.g. a status page |
 | `api.on(event, fn)` | events: `load`, `play`, `pause`, `seek`, `stop`, `ended`, `member_join`, `member_leave`, `reminder`, `state` |
+| `api.expose(name, fn)` | offers a function to other plugins (see below) |
+| `api.use(pluginId, name, …args)` | calls a function another plugin offers – throws if it is not installed and on |
+| `api.has(pluginId, name)` | whether that plugin is on and offers that function |
+| `api.providers(name)` | the plugins that are on and offer a function – e.g. every extension of yours |
 | `api.room` | `state()`, `members()`, `load({ plugin, id, title… })`, `play()`, `pause()`, `seek(seconds)`, `stop()`, `notify(text)` |
+
+## Plugins that build on each other
+
+A plugin can offer functions with `api.expose` and use another plugin's with `api.use` – so one plugin can extend
+another. The Spotify → YouTube plugin does this: it has no menu entry or screens (no `api.source`); it uses
+YouTube's `findVideo` to match songs to videos and offers `youtubeRows` and `youtubeList`, which YouTube shows at
+the top of its front page when `spotify-youtube` is written as a topic. List `needs` in plugin.json so the admin
+panel installs what yours builds on.
 
 ## Examples
 
-The plugins in this folder are complete examples:
+Complete plugins to learn from:
 
-- [`iptv/`](iptv/) – live TV with a programme guide, movies and series from Dispatcharr; its own stream proxy,
-  a shared download for movies, the next episode, new-episode alerts and an admin status page.
-- [`twitch/`](twitch/) – rows of live streams, search, HLS with quality choice, live chat and a player choice.
-- [`discord/`](discord/) – no menu entry; only listens to events.
-- [`now-playing/`](now-playing/) – a public web page using `api.route` and `api.room`.
+- [valonia/couchmate-iptv-dispatcharr](https://github.com/valonia/couchmate-iptv-dispatcharr) – live TV with a
+  programme guide, movies and series from Dispatcharr; its own stream proxy, a shared download for movies, the
+  next episode, new-episode alerts and an admin status page.
+- [valonia/couchmate-twitch](https://github.com/valonia/couchmate-twitch) – a front page built from views, search,
+  HLS with quality choice, live chat, and favourite channels that show when they are live (`favorite`, `status`).
+- [valonia/couchmate-youtube](https://github.com/valonia/couchmate-youtube) – videos, channels and playlists, a
+  queue, songs that follow straight on (`upNextBefore`), and video and audio as separate files. Offers
+  `findVideo`, and shows lists from extensions.
+- [valonia/couchmate-spotify-youtube](https://github.com/valonia/couchmate-spotify-youtube) – an extension of
+  YouTube: logging in with OAuth (PKCE), a status page in the admin panel, data kept in `api.dataDir`, `needs`.
 
-`npm run plugins:zip` packs every folder here into `dist/<id>.zip`.
+The plugins listed under **Get plugins** are the public repositories by `valonia` with the topic
+`couchmate-plugin`.

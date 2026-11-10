@@ -204,6 +204,18 @@ export function createAdmin(ctx) {
       return json(res, 200, { entries: ctx.menuLayout.forAdmin(plugins.menu(), names) });
     }
 
+    // ---- the order of the groups on the Favorites screen
+    if (sub === '/favorite-groups' && method === 'GET') {
+      const names = Object.fromEntries(plugins.list().map((p) => [p.id, p.name]));
+      return json(res, 200, { groups: ctx.favoriteGroupOrder.forAdmin(plugins.favoriteGroupList(), names) });
+    }
+    if (sub === '/favorite-groups' && method === 'PUT') {
+      ctx.favoriteGroupOrder.update(await readJson(req));
+      ctx.room.broadcastFavorites(); // the apps show the new order straight away
+      const names = Object.fromEntries(plugins.list().map((p) => [p.id, p.name]));
+      return json(res, 200, { groups: ctx.favoriteGroupOrder.forAdmin(plugins.favoriteGroupList(), names) });
+    }
+
     // ---- translations
     if (sub === '/translations' && method === 'GET') return json(res, 200, { languages: ctx.translator.forAdmin() });
     if (sub === '/translations' && method === 'PUT') {
@@ -287,7 +299,7 @@ export function createAdmin(ctx) {
     }
 
     // ---- plugins
-    const pluginList = () => ({ plugins: plugins.list(), bundled: plugins.bundled() });
+    const pluginList = () => ({ plugins: plugins.list() });
     if (sub === '/plugins' && method === 'GET') return json(res, 200, pluginList());
     if (sub === '/plugins/upload' && method === 'PUT') {
       const name = new URL(req.url, 'http://x').searchParams.get('name') || '';
@@ -298,11 +310,34 @@ export function createAdmin(ctx) {
         return json(res, 200, pluginList());
       } catch (e) { return json(res, 400, { error: e.message }); }
     }
-    const bundled = /^\/plugins\/bundled\/([a-z0-9_-]+)$/.exec(sub);
-    if (bundled && method === 'POST') {
+    // Plugins to get from GitHub, and installing one (from the list or any "owner/repo").
+    if (sub === '/plugins/catalog' && method === 'GET') {
       try {
-        const p = await plugins.installBundled(bundled[1]);
+        return json(res, 200, { catalog: await plugins.catalog(new URL(req.url, 'http://x').searchParams.has('fresh')) });
+      } catch (e) { return json(res, 502, { error: `Could not reach GitHub: ${e.message}` }); }
+    }
+    if (sub === '/plugins/github' && method === 'POST') {
+      try {
+        const b = await readJson(req);
+        const p = await plugins.installFromGitHub(b.repo, { withNeeds: Boolean(b.withNeeds) });
         console.log(`[admin] plugin installed: ${p.id}`);
+        return json(res, 200, pluginList());
+      } catch (e) {
+        // 409: it needs other plugins first – the page asks, then sends withNeeds: true.
+        if (e.needs) return json(res, 409, { error: e.message, needs: e.needs, plugin: e.plugin });
+        return json(res, 400, { error: e.message });
+      }
+    }
+    if (sub === '/plugins/check-updates' && method === 'POST') {
+      await plugins.checkUpdates();
+      return json(res, 200, pluginList());
+    }
+    const upd = /^\/plugins\/([a-z0-9_-]+)\/(update|auto-update)$/.exec(sub);
+    if (upd) {
+      try {
+        if (upd[2] === 'update' && method === 'POST') await plugins.installUpdate(upd[1]);
+        else if (upd[2] === 'auto-update' && method === 'PUT') plugins.setAutoUpdate(upd[1], (await readJson(req)).on);
+        else return json(res, 404, { error: 'Unknown request' });
         return json(res, 200, pluginList());
       } catch (e) { return json(res, 400, { error: e.message }); }
     }

@@ -10,7 +10,7 @@ import { SAFE_ID, ITEM_ID, clean, str, withTimeout } from './util.js';
 import { T } from './i18n.js';
 import { proxy } from './streams.js';
 
-const KEY_ACTIONS = ['pause', 'settings', 'chat', 'info', 'channels', 'channel_up', 'channel_down', 'seek_back', 'seek_forward', 'none'];
+const KEY_ACTIONS = ['pause', 'settings', 'chat', 'info', 'channels', 'channel_up', 'channel_down', 'seek_back', 'seek_forward', 'queue', 'none'];
 const KEYS = ['ok', 'up', 'down', 'left', 'right'];
 const SECTION_TYPES = ['quality', 'chat', 'audio', 'subtitles', 'choice', 'actions'];
 const ROUTE_AUTH = ['pin', 'admin', 'public'];
@@ -27,10 +27,49 @@ function text(v, max) {
   return clean(v, max) || null;
 }
 
+/**
+ * The groups on the Favorites screen for the usual kinds – used when a plugin does not name its own
+ * (source.favoriteGroups). style: poster (tall covers) | landscape (16:9 cards) | guide (TV channels: a row with
+ * what is on now). Lower order comes first.
+ */
+const FAVORITE_GROUPS = {
+  series: { title: 'Series', order: 10, style: 'poster' },
+  movie: { title: 'Movies', order: 20, style: 'poster' },
+  channel: { title: 'Channels', order: 30, style: 'guide' },
+  stream: { title: 'Streams', order: 40, style: 'landscape' },
+  creator: { title: 'Creators', order: 50, style: 'landscape' },
+  playlist: { title: 'Playlists', order: 60, style: 'landscape' },
+  video: { title: 'Videos', order: 70, style: 'landscape' },
+};
+const FAVORITE_STYLES = ['poster', 'landscape', 'guide'];
+
+// Updates from GitHub: plugin.json's "repository" ("owner/repo"); a release tagged with the version (e.g. v2.1.0).
+const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const GH_HEADERS = { 'user-agent': 'Couchmate', accept: 'application/vnd.github+json' };
+// Whose plugins the admin panel lists (public repositories with the topic "couchmate-plugin").
+const CATALOG_OWNER = 'valonia';
+
+/** plugin.json's "needs": the plugins this one builds on – [{ id, name, repository }]. */
+export function needsOf(manifest) {
+  return (Array.isArray(manifest?.needs) ? manifest.needs : []).slice(0, 10).map((n) => ({
+    id: String(n?.id || '').toLowerCase(),
+    name: String(n?.name || n?.id || ''),
+    repository: REPO.test(String(n?.repository || '')) ? String(n.repository) : null,
+  })).filter((n) => SAFE_ID.test(n.id));
+}
+
+/** Is version a newer than version b? ("2.10.0" > "2.9.1"; a leading "v" is ignored.) */
+export function isNewer(a, b) {
+  const parts = (v) => String(v || '').trim().replace(/^v/i, '').split(/[.+-]/).slice(0, 3).map((n) => parseInt(n, 10) || 0);
+  const x = parts(a);
+  const y = parts(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+}
+
 export class PluginHost {
-  constructor({ dir, bundledDir, stateFile, dataDir, cacheDir, room, log = console.log }) {
+  constructor({ dir, stateFile, dataDir, cacheDir, room, log = console.log }) {
     this.dir = dir;
-    this.bundledDir = bundledDir;
     this.stateFile = stateFile;
     this.dataDir = dataDir;
     this.cacheDir = cacheDir;
@@ -47,7 +86,7 @@ export class PluginHost {
 
   saveState() {
     const out = {};
-    for (const [id, p] of this.plugins) out[id] = { enabled: p.enabled, settings: p.settings };
+    for (const [id, p] of this.plugins) out[id] = { enabled: p.enabled, settings: p.settings, autoUpdate: Boolean(p.autoUpdate) };
     this.state = out;
     fs.writeFileSync(this.stateFile, JSON.stringify(out, null, 1));
     // Something was installed, switched on/off or removed – the apps reload their menu straight away.
@@ -78,7 +117,7 @@ export class PluginHost {
 
   async load(id) {
     const saved = this.state[id] || {};
-    const p = this.plugins.get(id) || { id, enabled: Boolean(saved.enabled), settings: saved.settings || {} };
+    const p = this.plugins.get(id) || { id, enabled: Boolean(saved.enabled), settings: saved.settings || {}, autoUpdate: Boolean(saved.autoUpdate) };
     this.plugins.set(id, p);
     this.reset(p);
     p.error = null;
@@ -94,6 +133,8 @@ export class PluginHost {
         description: manifest.description || '',
         requires: manifest.requires || null,
         homepage: manifest.homepage || null,
+        repository: manifest.repository || null, // GitHub "owner/repo" – where updates come from
+        needs: needsOf(manifest), // plugins this one builds on
         settings: manifest.settings || [],
         ...(mod.meta || {}),
       };
@@ -114,6 +155,7 @@ export class PluginHost {
     p.links = [];
     p.source = null;
     p.menuCache = [];
+    p.services = new Map(); // name → function other plugins can use (api.expose / api.use)
   }
 
   async start(p) {
@@ -146,6 +188,22 @@ export class PluginHost {
       source: (def) => { p.source = def; },
       /** Call when what source.menu() returns has changed (e.g. content appeared) – the apps reload their menu. */
       menuChanged: () => this.refreshMenu(p, false),
+      /**
+       * Offers a function to other plugins, e.g. api.expose('findVideo', async (query) => …). They call it with
+       * api.use('<this plugin id>', 'findVideo', query). Lets plugins build on each other (extensions).
+       */
+      expose: (name, fn) => {
+        if (!/^[A-Za-z0-9_]{1,40}$/.test(String(name)) || typeof fn !== 'function') throw new Error('api.expose(name, function)');
+        p.services.set(String(name), fn);
+      },
+      /**
+       * Calls a function another plugin offers (api.expose). Throws if that plugin is not installed, switched
+       * off, or does not offer it – check first with api.has(pluginId, name).
+       */
+      use: (pluginId, name, ...args) => this.useService(String(pluginId), String(name), args),
+      has: (pluginId, name) => Boolean(this.serviceOf(String(pluginId), String(name))),
+      /** The switched-on plugins that offer a function (api.expose) – e.g. every extension of this plugin. */
+      providers: (name) => [...this.plugins.values()].filter((x) => x.enabled && x.services?.has(String(name))).map((x) => x.id),
       /** Passes an upstream response on to the app, with Range support (seeking): api.proxy(req, res, url, extraHeaders). */
       proxy: (req, res, url, headers) => proxy(req, res, url, headers),
       room: this.room,
@@ -201,7 +259,7 @@ export class PluginHost {
   }
 
   /** Installs a plugin from a zip file. New plugins are switched off until someone switches them on. */
-  async installZip(filename, buf) {
+  async installZip(filename, buf, { expectId = null, checkNeeds = false } = {}) {
     let files = unzip(buf).filter((f) => !f.name.startsWith('__MACOSX/') && !f.name.endsWith('.DS_Store'));
     if (!files.length) throw new Error('The zip file is empty');
     // If everything sits in one folder inside the zip, that folder is dropped.
@@ -220,6 +278,16 @@ export class PluginHost {
     if (!/export\s+default/.test(entry.data.toString('utf8'))) throw new Error(`${main} does not look like a plugin (no "export default")`);
     const id = String(manifest.id || path.basename(String(filename)).replace(/\.zip$/i, '')).toLowerCase();
     if (!SAFE_ID.test(id)) throw new Error('Invalid plugin id in plugin.json (lowercase letters, digits, - and _)');
+    if (expectId && id !== expectId) throw new Error(`The update is for "${id}", not "${expectId}"`);
+    if (checkNeeds) {
+      const missing = needsOf(manifest).filter((n) => !this.plugins.has(n.id));
+      if (missing.length) {
+        const err = new Error(`${manifest.name || id} needs ${missing.map((n) => n.name).join(' and ')}`);
+        err.needs = missing;
+        err.plugin = { id, name: String(manifest.name || id) };
+        throw err;
+      }
+    }
 
     const tmp = path.join(this.dir, `.tmp-${id}-${Date.now()}`);
     for (const f of files) {
@@ -232,24 +300,75 @@ export class PluginHost {
     return this.replaceWith(id, tmp);
   }
 
-  /** Plugins that ship with the server (the plugins/ folder in the image). */
-  bundled() {
-    if (!this.bundledDir || !fs.existsSync(this.bundledDir)) return [];
-    return fs.readdirSync(this.bundledDir)
-      .filter((f) => SAFE_ID.test(f) && fs.existsSync(path.join(this.bundledDir, f, 'plugin.json')))
-      .map((f) => {
-        const m = JSON.parse(fs.readFileSync(path.join(this.bundledDir, f, 'plugin.json'), 'utf8'));
-        const installed = this.plugins.get(m.id || f);
-        return { id: m.id || f, name: m.name || f, version: m.version || '', description: m.description || '', requires: m.requires || null, installed: Boolean(installed), installedVersion: installed?.meta?.version || null };
-      });
+  // ------------------------------------------------------------ getting plugins from GitHub
+
+  /** A repository's latest release: { tag, version, zip, url, notes }, or null when it has none yet. */
+  async latestRelease(repo) {
+    const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, { headers: GH_HEADERS, signal: AbortSignal.timeout(15000) });
+    if (r.status === 404) return null;
+    if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    const rel = await r.json();
+    const zip = String(rel.zipball_url || '');
+    if (!zip.startsWith('https://api.github.com/')) return null;
+    return { tag: String(rel.tag_name || ''), version: String(rel.tag_name || '').replace(/^v/i, ''), zip, url: String(rel.html_url || ''), notes: String(rel.body || '').slice(0, 3000) };
   }
 
-  async installBundled(id) {
-    const src = path.join(this.bundledDir, id);
-    if (!SAFE_ID.test(id) || !fs.existsSync(path.join(src, 'plugin.json'))) throw new Error('That plugin does not ship with the server');
-    const tmp = path.join(this.dir, `.tmp-${id}-${Date.now()}`);
-    fs.cpSync(src, tmp, { recursive: true });
-    return this.replaceWith(id, tmp);
+  /**
+   * The plugins you can get: public GitHub repositories by CATALOG_OWNER with the topic "couchmate-plugin" – a new
+   * one shows up here as soon as it has a release, without a new server. Kept for 10 minutes.
+   */
+  async catalog(fresh = false) {
+    if (!fresh && this.catalogCache && Date.now() - this.catalogCache.t < 10 * 60 * 1000) return this.withInstalled(this.catalogCache.list);
+    const q = encodeURIComponent(`topic:couchmate-plugin user:${CATALOG_OWNER}`);
+    const r = await fetch(`https://api.github.com/search/repositories?q=${q}&per_page=50`, { headers: GH_HEADERS, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    const repos = ((await r.json()).items || []).map((x) => String(x.full_name || '')).filter((x) => REPO.test(x));
+    const list = (await Promise.all(repos.map(async (repo) => {
+      try {
+        const rel = await this.latestRelease(repo);
+        if (!rel) return null;
+        const m = await (await fetch(`https://raw.githubusercontent.com/${repo}/${encodeURIComponent(rel.tag)}/plugin.json`, { signal: AbortSignal.timeout(15000) })).json();
+        const id = String(m.id || '').toLowerCase();
+        if (!SAFE_ID.test(id)) return null;
+        return { repo, id, name: String(m.name || id), description: String(m.description || ''), requires: m.requires || null, version: rel.version, needs: needsOf(m) };
+      } catch { return null; }
+    }))).filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
+    this.catalogCache = { t: Date.now(), list };
+    return this.withInstalled(list);
+  }
+
+  withInstalled(list) {
+    return list.map((c) => {
+      const p = this.plugins.get(c.id);
+      return { ...c, installed: Boolean(p), installedVersion: p?.meta?.version || null };
+    });
+  }
+
+  /** Installs a plugin from a GitHub repository's latest release ("owner/repo" or its address). Switched off until switched on. */
+  async installFromGitHub(repoIn, { withNeeds = false } = {}, depth = 0) {
+    const repo = String(repoIn || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '');
+    if (!REPO.test(repo)) throw new Error('Write the repository as owner/name, e.g. valonia/couchmate-twitch');
+    const rel = await this.latestRelease(repo);
+    if (!rel) throw new Error(`${repo} has no release yet`);
+    const r = await fetch(rel.zip, { headers: GH_HEADERS, redirect: 'follow', signal: AbortSignal.timeout(120000) });
+    if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 50 * 1024 * 1024) throw new Error('The plugin is too big');
+    let p;
+    try {
+      p = await this.installZip(`${repo.split('/')[1]}.zip`, buf, { checkNeeds: true });
+    } catch (e) {
+      // It builds on plugins that are not installed: install those first if the admin said yes, else ask.
+      if (!e.needs || !withNeeds || depth > 2) throw e;
+      for (const n of e.needs) {
+        if (!n.repository) throw new Error(`${e.plugin.name} needs ${n.name}, but does not say where to get it`);
+        await this.installFromGitHub(n.repository, { withNeeds: true }, depth + 1);
+      }
+      p = await this.installZip(`${repo.split('/')[1]}.zip`, buf);
+    }
+    p.update = null;
+    this.log(`[plugins] ${p.meta?.name || p.id} ${p.meta?.version || ''} installed from github.com/${repo}`);
+    return p;
   }
 
   async replaceWith(id, tmp) {
@@ -261,6 +380,59 @@ export class PluginHost {
     const p = await this.load(id);
     this.saveState();
     return p;
+  }
+
+  // ------------------------------------------------------------ updates from GitHub
+
+  /** The plugin's GitHub repository ("owner/repo") from plugin.json, or null. */
+  repoOf(p) {
+    const r = String(p?.meta?.repository || '').trim().replace(/^https?:\/\/github\.com\//i, '').replace(/\.git$/i, '').replace(/\/+$/, '');
+    return REPO.test(r) ? r : null;
+  }
+
+  /**
+   * Asks GitHub for each plugin's latest release. A newer one is shown in the admin panel – and installed
+   * straight away for plugins set to update automatically (when [install] is true).
+   */
+  async checkUpdates({ install = true } = {}) {
+    for (const p of [...this.plugins.values()]) {
+      const repo = this.repoOf(p);
+      if (!repo) continue;
+      try {
+        const rel = await this.latestRelease(repo);
+        p.updateCheckedAt = Date.now();
+        p.updateError = null;
+        p.update = rel?.version && isNewer(rel.version, p.meta?.version) ? rel : null;
+        if (p.update) this.log(`[plugins] ${p.meta?.name || p.id}: version ${rel.version} is out (installed: ${p.meta?.version || '?'})`);
+        if (p.update && install && p.autoUpdate) await this.installUpdate(p.id);
+      } catch (e) {
+        p.updateError = e.message;
+        this.log(`[plugins] ${p.meta?.name || p.id}: could not check for updates: ${e.message}`);
+      }
+    }
+  }
+
+  /** Downloads the newer release from GitHub and installs it (settings and on/off are kept). */
+  async installUpdate(id) {
+    const p = this.require(id);
+    const u = p.update;
+    if (!u) throw new Error('There is no update');
+    const r = await fetch(u.zip, { headers: GH_HEADERS, redirect: 'follow', signal: AbortSignal.timeout(120000) });
+    if (!r.ok) throw new Error(`GitHub answered ${r.status}`);
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length > 50 * 1024 * 1024) throw new Error('The update is too big');
+    const from = p.meta?.version || '?';
+    const np = await this.installZip(`${id}.zip`, buf, { expectId: id });
+    np.update = null;
+    this.log(`[plugins] ${np.meta?.name || id} updated from ${from} to ${np.meta?.version || u.version}`);
+    return np;
+  }
+
+  setAutoUpdate(id, on) {
+    const p = this.require(id);
+    p.autoUpdate = Boolean(on);
+    this.saveState();
+    if (p.autoUpdate && p.update) this.installUpdate(id).catch((e) => this.log(`[plugins] ${id}: update failed: ${e.message}`));
   }
 
   remove(id) {
@@ -315,6 +487,43 @@ export class PluginHost {
   has(id, fn) { return typeof this.source(id)?.[fn] === 'function'; }
 
   /**
+   * The group a favourite goes under on the Favorites screen: { id, title, order, style }. A plugin names its own
+   * with source.favoriteGroups = { <kind>: { title, order, style } } – those are its own group (e.g. "Twitch
+   * channels"); otherwise the usual kinds share a group across plugins, and anything else goes under "Other".
+   */
+  favoriteGroup(plugin, kind) {
+    const k = str(kind);
+    const own = k && this.source(plugin)?.favoriteGroups?.[k];
+    if (own && typeof own === 'object') {
+      const base = FAVORITE_GROUPS[k];
+      return {
+        id: `${plugin}:${k}`,
+        title: text(own.title, 40) || { [T]: base?.title || 'Other' },
+        order: Number.isFinite(Number(own.order)) ? Number(own.order) : base?.order ?? 90,
+        style: FAVORITE_STYLES.includes(own.style) ? own.style : base?.style || 'landscape',
+      };
+    }
+    const base = FAVORITE_GROUPS[k];
+    if (base) return { id: k, title: { [T]: base.title }, order: base.order, style: base.style };
+    return { id: 'other', title: { [T]: 'Other' }, order: 99, style: 'landscape' };
+  }
+
+  /**
+   * Every group the Favorites screen can have – the usual ones, the ones the switched-on plugins name, and
+   * "Other" – with the order they suggest. For the admin panel, where the order can be changed.
+   */
+  favoriteGroupList() {
+    const out = Object.keys(FAVORITE_GROUPS).map((k) => ({ ...this.favoriteGroup(null, k), plugin: null }));
+    for (const [id, p] of this.plugins) {
+      const own = p.enabled && p.source?.favoriteGroups;
+      if (!own || typeof own !== 'object') continue;
+      for (const k of Object.keys(own).slice(0, 20)) if (/^[a-z_]{1,24}$/.test(k)) out.push({ ...this.favoriteGroup(id, k), plugin: id });
+    }
+    out.push({ ...this.favoriteGroup(null, null), plugin: null });
+    return out.sort((a, b) => a.order - b.order);
+  }
+
+  /**
    * Works out a plugin's menu entries. source.menu is a list, or a (async) function returning one – so a plugin
    * can leave out entries that have nothing to show. Without menu: one entry named after the source.
    */
@@ -350,6 +559,17 @@ export class PluginHost {
   }
 
   /** Calls a source function with a timeout. */
+  serviceOf(id, name) {
+    const p = this.plugins.get(id);
+    return (p?.enabled && p.services?.get(name)) || null;
+  }
+
+  async useService(id, name, args, timeoutMs = 60000) {
+    const fn = this.serviceOf(id, name);
+    if (!fn) throw new Error(`The plugin "${id}" does not offer "${name}" (is it installed and switched on?)`);
+    return withTimeout(Promise.resolve().then(() => fn(...args)), timeoutMs, `${id} did not answer in time`);
+  }
+
   async call(id, fn, args = [], timeoutMs = 15000) {
     const src = this.source(id);
     if (!src || typeof src[fn] !== 'function') throw new Error(`The plugin "${id}" cannot do that`);
@@ -388,6 +608,8 @@ export class PluginHost {
     if (Number(it.rating) > 0) out.rating = Math.round(Number(it.rating) * 10) / 10;
     for (const k of ['year', 'genre', 'badge']) { const v = text(it[k], 100); if (v) out[k] = v; }
     if (Number(it.duration) > 0) out.duration = Number(it.duration);
+    // Shown but cannot be played (e.g. a song that was not found) – the apps grey it out and skip it.
+    if (it.unavailable === true) out.unavailable = true;
     return out;
   }
 
@@ -452,11 +674,13 @@ export class PluginHost {
     const hasData = typeof src.data === 'function';
     const channels = hasData && Boolean(raw.channels);
     const guide = hasData && Boolean(raw.guide);
+    // queue: the plugin tells what plays next (data('queue', { id })) – shown in a list at the side.
+    const queue = hasData && Boolean(raw.queue);
     const keys = { ok: 'pause', up: 'info', down: 'settings', left: hasChat ? 'chat' : 'none', right: 'settings' };
     for (const k of KEYS) {
       const v = raw.keys?.[k];
       if (!KEY_ACTIONS.includes(v)) continue;
-      if ((v === 'chat' && !hasChat) || (['channels', 'channel_up', 'channel_down'].includes(v) && !channels)) keys[k] = 'none';
+      if ((v === 'chat' && !hasChat) || (['channels', 'channel_up', 'channel_down'].includes(v) && !channels) || (v === 'queue' && !queue)) keys[k] = 'none';
       else keys[k] = v;
     }
 
@@ -480,7 +704,10 @@ export class PluginHost {
     }
     // overlay: a view drawn on top of the video (building blocks bound to media/player/room), or null for the app's own.
     const overlay = raw.overlay && typeof raw.overlay === 'object' && !Array.isArray(raw.overlay) ? this.view(id, raw.overlay) : null;
-    return { keys, settings, channels, guide, overlay };
+    // upNextBefore: "next" shows this many seconds before the end and the next item follows straight on, without
+    // waiting for everyone (the apps buffer it in advance) – for music. 0 = the usual countdown after the end.
+    const upNextBefore = Math.min(30, Math.max(0, Math.round(Number(raw.upNextBefore) || 0)));
+    return { keys, settings, channels, guide, queue, overlay, upNextBefore };
   }
 
   /** Choices the player sent (?opt.<id>=<value>): only 'choice' settings the plugin declared, only valid values. */
@@ -505,6 +732,12 @@ export class PluginHost {
       requires: p.meta?.requires || null,
       homepage: p.meta?.homepage || null,
       enabled: p.enabled,
+      repository: this.repoOf(p),
+      needs: (p.meta?.needs || []).map((n) => ({ ...n, installed: this.plugins.has(n.id), enabled: Boolean(this.plugins.get(n.id)?.enabled) })),
+      autoUpdate: Boolean(p.autoUpdate),
+      update: p.update ? { version: p.update.version, notes: p.update.notes, url: p.update.url } : null,
+      updateError: p.updateError || null,
+      updateCheckedAt: p.updateCheckedAt || null,
       error: p.error,
       menu: p.enabled && p.source ? this.menu().filter((m) => m.plugin === p.id).map((m) => (typeof m.title === 'object' ? m.title[T] : m.title)) : [],
       links: p.links || [],

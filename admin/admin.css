@@ -195,6 +195,12 @@ body.dl .howto b { color: var(--text); }
 .menu-row .arrows { display: flex; gap: 4px; }
 .menu-row .arrows .btn { padding: 4px 10px; }
 .menu-row .arrows .btn:disabled { opacity: .3; cursor: default; }
+.menu-row { transition: transform .15s ease, box-shadow .15s ease; }
+.menu-row .grip { cursor: grab; touch-action: none; user-select: none; color: var(--faint); font-size: 18px; letter-spacing: -3px; padding: 4px 6px; }
+.menu-row .grip:hover { color: var(--text); }
+.menu-list.sorting, .menu-list.sorting * { cursor: grabbing; user-select: none; }
+.menu-row.dragging { transition: none; position: relative; z-index: 2; box-shadow: 0 8px 24px rgba(0, 0, 0, .35); }
+.section-title { margin: 32px 0 6px; font: 700 20px var(--display); }
 
 /* ---------- translations */
 .tr-table td:first-child { color: var(--dim); width: 45%; }
@@ -209,3 +215,4 @@ body.dl .howto b { color: var(--text); }
 .modal-body { padding: 10px 20px; overflow: auto; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 14px 20px 18px; border-top: 1px solid var(--line); }
 .btn svg { width: 16px; height: 16px; }
+.plugin .updates { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--line); }

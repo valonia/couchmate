@@ -10,12 +10,14 @@ import { randomUUID } from 'node:crypto';
 import { clean, str, ITEM_ID, SAFE_ID } from './util.js';
 import { Translator, T } from './i18n.js';
 
+const PREPARE_AHEAD_S = 30; // music: the next item is prepared this long before "next" shows
 const START_DELAY_MS = 800; // everyone starts this long after "go", so they start together
 
 const now = () => Date.now();
 
 export class Room {
-  constructor({ settings, plugins, streams, history, favorites, reminders, translator, roomFile, log = console.log }) {
+  constructor({ settings, plugins, streams, history, favorites, favoriteGroupOrder = null, reminders, translator, roomFile, log = console.log }) {
+    this.favoriteGroupOrder = favoriteGroupOrder;
     Object.assign(this, { settings, plugins, streams, history, favorites, reminders, translator, roomFile, log });
     this.state = {
       media: null,
@@ -26,7 +28,8 @@ export class Room {
       version: 0,
       changedBy: null,
       action: null,
-      upNext: null, // { item, startsAt } – the next episode starts automatically at startsAt
+      upNext: null, // { item, startsAt, early?, media? } – the next one starts automatically at startsAt
+      preparedNext: null, // { item, media } – music: what follows, sent early so the apps can start buffering it
       reminder: null, // { key, title, start, channel, switchAt } – switches everyone at switchAt
     };
     this.clients = new Map(); // ws → client
@@ -37,6 +40,7 @@ export class Room {
     this.chatRelay = null;
     this.timers = [
       setInterval(() => this.checkEnded(), 1000),
+      setInterval(() => this.checkStatus(), 2 * 60 * 1000), // e.g. which favourite channels are live
       setInterval(() => this.checkReminders(), 1000),
       setInterval(() => this.flushChat(), 800),
       setInterval(() => this.heartbeat(), 20000),
@@ -83,7 +87,19 @@ export class Room {
     }));
   }
   broadcastMembers() { this.broadcast({ type: 'members', members: this.members().map(({ id, name, device, watching }) => ({ id, name, device, watching })) }); }
-  broadcastFavorites() { this.broadcast({ type: 'favorites', favorites: this.favorites.list() }); }
+  broadcastFavorites() { this.broadcast(this.favoritesMsg()); }
+  /** The favourites, each with the group it shows under (named by its plugin, or the usual one for its kind). */
+  favoritesMsg() {
+    // The order of the groups is the admin's (favoriteGroupOrder), else what the plugins suggest.
+    const pos = this.favoriteGroupOrder?.positions(this.plugins.favoriteGroupList());
+    return {
+      type: 'favorites',
+      favorites: this.favorites.list().map((f) => {
+        const group = this.plugins.favoriteGroup(f.plugin, f.kind);
+        return { ...f, group: { ...group, order: pos?.get(group.id) ?? group.order } };
+      }),
+    };
+  }
   broadcastReminders() { this.broadcast({ type: 'reminders', reminders: this.reminders.list() }); }
   broadcastHistory() { this.broadcast({ type: 'history_changed' }); }
 
@@ -161,29 +177,42 @@ export class Room {
       url: `/stream/${plugin}/${encodeURIComponent(id)}`,
       // 'hls' or 'file' – so players know what they get (the address has no file extension).
       type: r.type,
+      // The video has a separate audio file: the apps fetch it from the same address with ?part=audio.
+      audio: Boolean(r.audio),
       chat: live && this.plugins.has(plugin, 'chat'),
       // The plugin decides the player's keys and settings; the apps draw them.
       player: this.plugins.playerSpec(plugin, r.player),
     };
     // The plugin's own player description, kept to rebuild `player` – not sent to the apps.
     Object.defineProperty(media, 'playerRaw', { value: r.player && typeof r.player === 'object' ? r.player : null, enumerable: false });
+    // The length the plugin knows (if any) – used until the apps report it.
+    Object.defineProperty(media, 'knownDuration', { value: Number(r.duration) > 0 ? Number(r.duration) : null, enumerable: false });
     return media;
   }
 
-  async load(by, { plugin, id, position = 0, meta = {} }) {
-    const media = await this.buildMedia(plugin, id, meta);
+  /**
+   * seamless: start right away without waiting for everyone to be ready – used when the next item follows
+   * straight on (the apps have buffered it in advance). `media` = already built (skips asking the plugin).
+   */
+  async load(by, { plugin, id, position = 0, meta = {}, media: prebuilt = null, seamless = false }) {
+    const media = prebuilt || await this.buildMedia(plugin, id, meta);
     const pos = Math.max(0, Number(position) || 0);
     this.everyoneWatches(); // everyone jumps into the player when something new is loaded
+    this.upNextDismissed = null;
+    this.prepared = null;
+    for (const o of this.clients.values()) o.nextReady = null;
     this.mutate(by, 'load', () => {
       const s = this.state;
+      s.preparedNext = null;
       s.media = media;
       s.refTime = now();
-      if (media.live) {
-        s.position = 0; s.paused = false; s.waiting = false;
+      if (media.live || seamless) {
+        s.position = media.live ? 0 : pos; s.paused = false; s.waiting = false;
       } else {
         s.position = pos; s.paused = true; s.waiting = true;
       }
     });
+    if (media.knownDuration && !this.history.durationOf(media)) this.history.setDuration(media, media.knownDuration);
     this.broadcastMembers();
     this.log(`[room] ${by || 'Couchmate'} started "${typeof media.title === 'object' ? media.title[T] : media.title}" (${plugin})`);
     return media;
@@ -230,8 +259,9 @@ export class Room {
         c.device = clean(msg.device, 40);
         c.lang = Translator.normalize(msg.lang);
         this.translator.prepare(c.lang);
+        this.send(c, { type: 'translations_version', lang: c.lang, version: this.translator.version(c.lang) });
         this.send(c, this.stateMsg());
-        this.send(c, { type: 'favorites', favorites: this.favorites.list() });
+        this.send(c, this.favoritesMsg());
         this.send(c, { type: 'reminders', reminders: this.reminders.list() });
         this.broadcastMembers();
         this.log(`[room] ${c.name} (${c.device || 'unknown device'}) connected`);
@@ -240,6 +270,7 @@ export class Room {
 
       case 'lang':
         c.lang = Translator.normalize(msg.lang);
+        this.send(c, { type: 'translations_version', lang: c.lang, version: this.translator.version(c.lang) });
         this.send(c, this.stateMsg());
         break;
 
@@ -308,28 +339,34 @@ export class Room {
         this.updateChat();
         break;
 
+      case 'next_ready':
+        // The app has buffered the next one (shown before the end) – see playUpNext.
+        c.nextReady = [s.upNext?.early ? s.upNext.item.id : null, s.preparedNext?.item.id].includes(str(msg.id)) ? str(msg.id) : null;
+        break;
+
       case 'next_now':
         if (s.upNext) this.playUpNext(c.name);
         break;
 
       case 'next_cancel':
-        if (s.upNext) {
+        if (s.upNext?.early) {
+          // Shown before the end: this one plays to the end and then stops.
+          this.clearUpNext();
+          this.upNextDismissed = s.media;
+          s.preparedNext = null;
+          s.version++;
+          s.action = 'upnext_cancel';
+          this.broadcastState();
+          this.log(`[room] ${c.name} cancelled what plays next`);
+        } else if (s.upNext) {
           this.mutate(c.name, 'pause', () => { s.position = this.position(); s.paused = true; s.waiting = false; });
           this.log(`[room] ${c.name} cancelled the next episode`);
         }
         break;
 
-      case 'fav_add': {
-        const it = this.plugins.item(str(msg.item?.plugin), msg.item || {});
-        if (!it || !SAFE_ID.test(it.plugin) || !it.favorite) return;
-        const added = this.favorites.add({ ...it, title: plainText(it.title), subtitle: plainText(it.subtitle) }, c.name);
-        if (added) {
-          this.log(`[favorites] ${c.name} added ${added.title}`);
-          this.broadcastFavorites();
-          this.checkEpisodes(added.key);
-        }
+      case 'fav_add':
+        this.addFavorite(c, msg.item).catch((e) => this.log(`[favorites] could not add: ${e.message}`));
         break;
-      }
       case 'fav_remove':
         if (this.favorites.remove(str(msg.key))) this.broadcastFavorites();
         break;
@@ -453,41 +490,85 @@ export class Room {
   }
 
   playUpNext(by) {
-    const next = this.state.upNext?.item;
-    if (!next) return;
+    const up = this.state.upNext;
+    if (!up?.item) return;
     this.clearUpNext();
-    this.load(by, { plugin: next.plugin, id: next.id, meta: next })
-      .catch((e) => this.log(`[room] next episode: ${e.message}`));
+    const next = up.item;
+    // Shown before the end, prepared, and every app watching has buffered it: it follows straight on. Otherwise
+    // (an app without buffering, a slow connection) everyone waits for each other as usual, so nobody misses the start.
+    const watching = [...this.clients.values()].filter((c) => c.name && c.watching);
+    const seamless = Boolean(up.early && up.media) && watching.every((c) => c.nextReady === next.id);
+    if (up.early && !seamless) this.log('[room] not every app had buffered the next one – waiting for everyone');
+    this.load(by, { plugin: next.plugin, id: next.id, meta: next, media: seamless ? up.media : null, seamless })
+      .catch((e) => this.log(`[room] next: ${e.message}`));
   }
 
-  /** Runs every second: when an episode has ended, "next episode" is shown and starts after a while. */
+  /**
+   * Runs every second: when something has ended, "next" is shown and starts after a while. Plugins with
+   * player.upNextBefore (music) show it that many seconds before the end instead, and the next item follows
+   * straight on when this one ends. The next one is prepared a little earlier still (asking the plugin can take
+   * several seconds), so the card shows on time – and the apps are told at once, so they get those seconds to buffer it.
+   */
   async checkEnded() {
     const s = this.state;
     const cur = s.media;
     if (this.checkingNext || !cur || cur.live || s.paused || s.waiting || s.upNext) return;
     const dur = this.history.durationOf(cur);
-    if (!(dur > 0) || this.position() < dur - 1) return;
-    this.checkingNext = true;
-    try {
-      let next = null;
-      if (this.plugins.has(cur.plugin, 'next')) {
-        next = this.plugins.item(cur.plugin, await this.plugins.call(cur.plugin, 'next', [cur.id], 15000).catch(() => null));
+    if (!(dur > 0)) return;
+    const before = Number(cur.player?.upNextBefore) || 0;
+    const left = dur - this.position();
+    if (left > (before > 0 ? before + PREPARE_AHEAD_S : 1)) return;
+    // Cancelled: play to the end, then stop there.
+    if (this.upNextDismissed === cur) {
+      if (left <= 1) this.mutate(null, 'ended', () => { s.position = dur; s.paused = true; });
+      return;
+    }
+    let p = this.prepared?.cur === cur ? this.prepared : null;
+    if (!p) {
+      this.checkingNext = true;
+      try {
+        let next = null;
+        if (this.plugins.has(cur.plugin, 'next')) {
+          next = this.plugins.item(cur.plugin, await this.plugins.call(cur.plugin, 'next', [cur.id], 15000).catch(() => null));
+        }
+        // Early: get the next one's stream now, so the apps can buffer it.
+        const media = next && before > 0
+          ? await this.buildMedia(next.plugin, next.id, next).catch((e) => { this.log(`[room] preparing the next one: ${e.message}`); return null; })
+          : null;
+        if (s.media !== cur) return;
+        p = this.prepared = { cur, next, media };
+      } finally {
+        this.checkingNext = false;
       }
-      if (s.media !== cur || s.paused || s.upNext) return;
-      if (!next) {
-        // Nothing comes after this – stay at the end.
-        this.mutate(null, 'ended', () => { s.position = dur; s.paused = true; });
-        return;
-      }
-      const wait = Number(this.settings.get('upnextSeconds')) * 1000;
-      s.upNext = { item: next, startsAt: now() + wait };
+    }
+    // Music: tell the apps what follows right away – they buffer it from now on, the card comes later.
+    if (before > 0 && p.next && p.media && s.media === cur && this.upNextDismissed !== cur && s.preparedNext?.item.id !== p.next.id) {
+      s.preparedNext = { item: p.next, media: p.media };
+      this.broadcastState();
+    }
+    if (s.paused || s.waiting || s.upNext || this.upNextDismissed === cur) return;
+    const leftNow = dur - this.position();
+    if (!p.next) {
+      // Nothing comes after this – stay at the end.
+      if (leftNow <= 1) this.mutate(null, 'ended', () => { s.position = dur; s.paused = true; });
+      return;
+    }
+    if (before > 0) {
+      if (leftNow > before) return; // prepared – the card comes later
+      const wait = Math.max(0, leftNow * 1000);
+      s.upNext = { item: p.next, startsAt: now() + wait, early: true, media: p.media };
       s.version++;
       s.action = 'upnext';
       this.broadcastState();
       this.upNextTimer = setTimeout(() => this.playUpNext(null), wait);
-    } finally {
-      this.checkingNext = false;
+      return;
     }
+    const wait = Number(this.settings.get('upnextSeconds')) * 1000;
+    s.upNext = { item: p.next, startsAt: now() + wait };
+    s.version++;
+    s.action = 'upnext';
+    this.broadcastState();
+    this.upNextTimer = setTimeout(() => this.playUpNext(null), wait);
   }
 
   // ------------------------------------------------------------ reminders
@@ -554,6 +635,58 @@ export class Room {
   }
 
   // ------------------------------------------------------------ favourites: new episodes
+
+  /**
+   * Adds a favourite. The plugin may decide what is saved (source.favorite) – e.g. Twitch saves the channel,
+   * not the stream that is on right now.
+   */
+  async addFavorite(c, raw) {
+    const plugin = str(raw?.plugin);
+    let it = this.plugins.item(plugin, raw || {});
+    if (!it || !SAFE_ID.test(it.plugin) || !it.favorite) return;
+    if (this.plugins.has(plugin, 'favorite')) {
+      const own = await this.plugins.call(plugin, 'favorite', [it], 10000).catch(() => undefined);
+      if (own === null) return; // the plugin said no
+      if (own) it = this.plugins.item(plugin, own) || it;
+    }
+    const added = this.favorites.add({ ...it, title: plainText(it.title), subtitle: plainText(it.subtitle) }, c.name);
+    if (added) {
+      this.log(`[favorites] ${c.name} added ${added.title}`);
+      this.broadcastFavorites();
+      this.checkEpisodes(added.key);
+      this.checkStatus(plugin);
+    }
+  }
+
+  /** Asks the plugins for their favourites' current status (source.status), e.g. which channels are live. */
+  async checkStatus(only = null) {
+    const byPlugin = new Map();
+    for (const f of this.favorites.entries) {
+      if (only && f.plugin !== only) continue;
+      if (!byPlugin.has(f.plugin)) byPlugin.set(f.plugin, []);
+      byPlugin.get(f.plugin).push(f);
+    }
+    let changed = false;
+    for (const [plugin, favs] of byPlugin) {
+      if (!this.plugins.has(plugin, 'status')) continue;
+      try {
+        const res = await this.plugins.call(plugin, 'status', [favs.map((f) => f.id)], 20000);
+        if (!res || typeof res !== 'object') continue;
+        for (const f of favs) {
+          const st = res[f.id];
+          if (!st || typeof st !== 'object') continue;
+          const patch = { ...st };
+          if (patch.image) patch.image = this.plugins.imageUrl(plugin, patch.image);
+          if (patch.title) patch.title = plainText(patch.title);
+          if (patch.subtitle) patch.subtitle = plainText(patch.subtitle);
+          if (this.favorites.updateStatus(f.key, patch)) changed = true;
+        }
+      } catch (e) {
+        this.log(`[favorites] ${plugin}: could not check status: ${e.message}`);
+      }
+    }
+    if (changed) this.broadcastFavorites();
+  }
 
   async checkEpisodes(key) {
     const fav = this.favorites.get(key);
@@ -644,6 +777,7 @@ export class Room {
 
   /** Called once the plugins are loaded. */
   async restore() {
+    this.checkStatus(); // the plugins are loaded: which favourite channels are live right now
     let r;
     try { r = JSON.parse(fs.readFileSync(this.roomFile, 'utf8')); } catch { return; }
     const saved = r?.media;

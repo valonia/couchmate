@@ -9,6 +9,7 @@
 // then shared by every device. Until a translation is ready, the English text is used.
 
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { JsonFile } from './util.js';
 
 export const T = '$t';
@@ -69,6 +70,14 @@ export class Translator {
     if (t) dict[text] = t; else delete dict[text];
     this.manual.flush();
     for (const fn of this.listeners) { try { fn(lang); } catch { /* listener gone */ } }
+  }
+
+  /**
+   * A short fingerprint of the hand-corrected texts in [lang]. The apps keep translations on the device;
+   * when this changes (e.g. corrections made while they were offline) they throw away what they kept.
+   */
+  version(lang) {
+    return createHash('sha1').update(JSON.stringify(this.manual.data[lang] || {})).digest('hex').slice(0, 12);
   }
 
   /** A device connected with this language – get its model ready. */

@@ -25,6 +25,8 @@ export class Favorites {
       subtitle: e.subtitle,
       image: e.image,
       live: e.live,
+      // Kept up to date by the plugin (source.status), e.g. whether a Twitch channel is live now.
+      ...(e.status ? { status: e.status } : {}),
       action: e.action,
       view: e.view || null,
       addedBy: e.addedBy,
@@ -112,6 +114,23 @@ export class Favorites {
     if (!fresh.length) return false;
     e.newEpisodes.push(...fresh);
     this.log(`[favorites] ${e.title}: ${fresh.length} new episode(s) (${fresh.map((f) => f.label).join(', ')})`);
+    this.store.save();
+    return true;
+  }
+
+  /**
+   * The plugin's current status for an item: { live, title, subtitle, image, viewers } (each optional).
+   * Returns true if anything changed.
+   */
+  updateStatus(key, status) {
+    const e = this.get(key);
+    if (!e) return false;
+    const next = {};
+    if (typeof status.live === 'boolean') next.live = status.live;
+    for (const k of ['title', 'subtitle', 'image']) if (typeof status[k] === 'string' && status[k]) next[k] = status[k];
+    if (Number(status.viewers) >= 0 && status.viewers !== null && status.viewers !== undefined) next.viewers = Math.round(Number(status.viewers));
+    if (JSON.stringify(next) === JSON.stringify(e.status || {})) return false;
+    e.status = next;
     this.store.save();
     return true;
   }

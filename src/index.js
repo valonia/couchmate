@@ -22,8 +22,9 @@ import { Room } from './room.js';
 import { Translator } from './i18n.js';
 import { createEngine } from './translate-engine.js';
 import { MenuLayout } from './menu.js';
+import { FavoriteGroupOrder } from './favgroups.js';
 import { createAdmin } from './admin.js';
-import { json, readJson, clean, str, SAFE_ID } from './util.js';
+import { json, readJson, clean, str, SAFE_ID, ITEM_ID } from './util.js';
 
 installLogCapture();
 
@@ -49,6 +50,7 @@ const history = new History(path.join(cfg.dataDir, 'history.json'));
 const favorites = new Favorites(path.join(cfg.dataDir, 'favorites.json'));
 const reminders = new Reminders(path.join(cfg.dataDir, 'reminders.json'));
 const menuLayout = new MenuLayout(path.join(cfg.dataDir, 'menu.json'));
+const favoriteGroupOrder = new FavoriteGroupOrder(path.join(cfg.dataDir, 'favorite-groups.json'));
 const translator = new Translator(path.join(cfg.dataDir, 'translations.json'), {
   engine: null, // set below once the translation engine has started
   enabled: () => Boolean(settings.get('translation')),
@@ -59,14 +61,13 @@ createEngine({ dataDir: cfg.dataDir }).then((engine) => { translator.engine = en
 const roomApi = {};
 const plugins = new PluginHost({
   dir: path.join(cfg.dataDir, 'plugins'),
-  bundledDir: path.join(ROOT, 'plugins'),
   stateFile: path.join(cfg.dataDir, 'plugins.json'),
   dataDir: path.join(cfg.dataDir, 'plugin-data'),
   cacheDir: cfg.cacheDir,
   room: roomApi,
 });
 const streams = new Streams({ plugins });
-const room = new Room({ settings, plugins, streams, history, favorites, reminders, translator, roomFile: path.join(cfg.dataDir, 'room.json') });
+const room = new Room({ settings, plugins, streams, history, favorites, favoriteGroupOrder, reminders, translator, roomFile: path.join(cfg.dataDir, 'room.json') });
 Object.assign(roomApi, room.api());
 
 plugins.onChange(() => {
@@ -79,7 +80,7 @@ translator.onChange((lang) => room.broadcast({ type: 'translations_changed', lan
 translator.onTranslated((lang) => room.textsTranslated(lang));
 
 const admin = createAdmin({
-  dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, translator, version: VERSION,
+  dataDir: cfg.dataDir, settings, plugins, room, roomApi, favorites, reminders, history, menuLayout, favoriteGroupOrder, translator, version: VERSION,
   menuChanged: () => room.broadcast({ type: 'menu_changed' }),
 });
 
@@ -197,6 +198,14 @@ const server = http.createServer(async (req, res) => {
     if (p === '/api/favorites') return json(res, 200, favorites.list());
     if (p === '/api/reminders') return json(res, 200, reminders.list());
     if (p === '/api/state') return localized(res, url, { state: room.state, members: room.members() });
+    // Get an item's stream ready in the background (e.g. the one focused in the queue), so it starts quickly
+    // if it is picked: /api/prepare/<plugin>?id=<id>. Answers at once.
+    if ((m = p.match(/^\/api\/prepare\/([a-z0-9_-]{1,64})$/))) {
+      const id = str(url.searchParams.get('id'));
+      if (!plugins.has(m[1], 'resolve') || !ITEM_ID.test(id)) return json(res, 404, { error: 'Nothing to prepare' });
+      streams.prepare(m[1], id);
+      return json(res, 202, { ok: true });
+    }
     if ((m = p.match(/^\/api\/qualities\/([a-z0-9_-]{1,64})$/))) {
       return json(res, 200, await streams.qualities(m[1], str(url.searchParams.get('id')), url.searchParams));
     }
@@ -248,5 +257,9 @@ server.listen(cfg.port, async () => {
   if (!admin.hasPassword()) console.warn('Open /admin in a browser to create the admin password.');
   if (!pin()) console.warn('No PIN code set yet – the apps cannot connect until you set one in the admin panel.');
   await plugins.loadAll().catch((e) => console.warn('[plugin]', e.message));
+  // New plugin versions on GitHub: a minute after starting, then every 6 hours.
+  const check = () => plugins.checkUpdates().catch((e) => console.warn('[plugins] update check:', e.message));
+  setTimeout(check, 60 * 1000).unref?.();
+  setInterval(check, 6 * 60 * 60 * 1000).unref?.();
   await room.restore();
 });

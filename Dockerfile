@@ -6,8 +6,6 @@ COPY package.json package-lock.json* ./
 RUN npm install --omit=dev && npm cache clean --force  && cd node_modules/onnxruntime-node/bin/napi-v3  && rm -rf darwin win32 linux/*/libonnxruntime_providers_cuda.so linux/*/libonnxruntime_providers_tensorrt.so
 COPY src ./src
 COPY admin ./admin
-# Plugins that ship with the server (installed from the admin panel with one click).
-COPY plugins ./plugins
 RUN mkdir -p /cache /data && chown node:node /cache /data
 ENV DATA_DIR=/data
 ENV CACHE_DIR=/cache

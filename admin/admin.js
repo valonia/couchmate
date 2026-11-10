@@ -47,7 +47,7 @@ async function api(path, { method = 'GET', body, raw } = {}) {
   });
   const data = await r.json().catch(() => ({}));
   if (r.status === 401 && path !== '/login' && path !== '/setup') { start(); throw new Error('Not logged in'); }
-  if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(data.error || `Error ${r.status}`), { status: r.status, data });
   return data;
 }
 
@@ -336,7 +336,7 @@ async function renderSettings(main) {
 async function renderPlugins(main) {
   let d = await api('/plugins');
   const listEl = h('div', { class: 'grid' });
-  const bundledEl = h('div', { class: 'bundled-list' });
+  const catalogEl = h('div', { class: 'bundled-list' }, h('span', { class: 'faint' }, 'Asking GitHub…'));
   const picker = h('input', { type: 'file', accept: '.zip', hidden: true, onchange: run(async () => {
     const f = picker.files[0];
     if (!f) return;
@@ -371,6 +371,33 @@ async function renderPlugins(main) {
       ]);
     };
     const missing = p.settings.some((s) => s.required && (s.type === 'secret' ? !s.isSet : !s.value));
+    // Updates from the plugin's GitHub repository (plugin.json "repository").
+    let updates = null;
+    if (p.repository) {
+      const auto = h('input', { type: 'checkbox', checked: p.autoUpdate, 'aria-label': `Update ${p.name} automatically` });
+      auto.addEventListener('change', run(async () => {
+        d = await api(`/plugins/${p.id}/auto-update`, { method: 'PUT', body: { on: auto.checked } });
+        toast(auto.checked ? `${p.name} updates by itself from now on` : `${p.name} is only updated when you say so`);
+        renderList();
+      }));
+      const checked = p.updateCheckedAt ? new Date(p.updateCheckedAt).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' }) : null;
+      updates = h('div', { class: 'updates' },
+        p.update && h('p', { class: 'notice', style: { margin: 0, display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' } },
+          h('span', { class: 'grow' }, h('b', {}, `Version ${p.update.version} is out`), `  (you have ${p.version})`),
+          p.update.url && h('a', { href: p.update.url, target: '_blank', rel: 'noopener', style: { fontSize: '13px' } }, 'What’s new ↗'),
+          h('button', { class: 'btn small primary', onclick: run(async () => {
+            d = await api(`/plugins/${p.id}/update`, { method: 'POST', body: {} });
+            toast(`${p.name} updated`);
+            renderList();
+          }) }, `Update to ${p.update.version}`)),
+        h('div', { class: 'row', style: { gap: '10px', alignItems: 'center' } },
+          h('label', { class: 'switch', title: 'Install new versions from GitHub by itself' }, auto, h('span', {})),
+          h('span', {}, 'Update automatically'),
+          h('span', { class: 'faint', style: { fontSize: '13px' } },
+            '  from ', h('a', { href: `https://github.com/${p.repository}`, target: '_blank', rel: 'noopener' }, `github.com/${p.repository}`),
+            checked ? ` · checked ${checked}` : '')),
+        p.updateError && h('p', { class: 'faint', style: { margin: 0, fontSize: '13px' } }, `Could not check for updates: ${p.updateError}`));
+    }
     return h('section', { class: 'card plugin' },
       h('div', { class: 'top' },
         h('div', { class: 'grow' },
@@ -384,6 +411,9 @@ async function renderPlugins(main) {
         h('label', { class: 'switch' }, toggle, h('span', {}))),
       p.error && h('p', { class: 'error', style: { margin: 0 } }, `Error: ${p.error}`),
       missing && h('p', { class: 'notice', style: { margin: 0 } }, 'Fill in the settings before using this plugin.'),
+      (p.needs || []).filter((n) => !n.installed || !n.enabled).map((n) => h('p', { class: 'notice', style: { margin: 0 } },
+        h('b', {}, `Needs ${n.name}: `), n.installed ? `switch on ${n.name} below.` : `install ${n.name} under Get plugins above.`)),
+      updates,
       h('div', { class: 'row' },
         p.settings.length ? h('button', { class: `btn small ${missing ? 'primary' : ''}`, onclick: openSettings }, icon('settings'), 'Settings') : null,
         confirmBtn('Remove plugin', 'Click again to remove', async () => {
@@ -393,33 +423,144 @@ async function renderPlugins(main) {
         })));
   }
 
-  function renderList() {
-    fill(bundledEl, d.bundled.length ? d.bundled.map((b) => {
-      const update = b.installed && b.installedVersion !== b.version;
-      return h('div', { class: 'bundled' },
-        h('div', { class: 'grow' },
-          h('div', {}, h('b', {}, b.name), h('span', { class: 'faint' }, `  v${b.version}`)),
-          h('div', { class: 'faint', style: { fontSize: '13px' } }, b.description)),
-        b.installed && !update ? h('span', { class: 'pill ok' }, 'Installed')
-          : h('button', { class: 'btn small primary', onclick: run(async () => {
-            d = await api(`/plugins/bundled/${b.id}`, { method: 'POST', body: {} });
-            toast(update ? `${b.name} updated` : `${b.name} installed – switch it on below`);
+  // Plugins to get: the list from GitHub, and any repository by its name.
+  let catalog = null;
+  let catalogError = null;
+  const loadCatalog = async (fresh) => {
+    try { catalog = (await api(`/plugins/catalog${fresh ? '?fresh' : ''}`)).catalog; catalogError = null; } catch (e) { catalogError = e.message; }
+    drawCatalog();
+  };
+  const install = (repo, name) => run(async () => {
+    try {
+      d = await api('/plugins/github', { method: 'POST', body: { repo } });
+      toast(`${name || repo} installed – switch it on below`);
+      renderList();
+    } catch (e) {
+      if (e.status !== 409 || !e.data?.needs) throw e;
+      // It builds on plugins that are not installed: they have to be installed too.
+      const needs = e.data.needs;
+      const pname = e.data.plugin?.name || name || repo;
+      const names = needs.map((n) => n.name).join(' and ');
+      const close = modal(`${pname} needs ${names}`,
+        h('div', {},
+          h('p', { style: { marginTop: 0 } }, `${pname} builds on ${names}, which is not installed. It cannot work without it.`),
+          h('ul', {}, needs.map((n) => h('li', {}, h('b', {}, n.name), n.repository ? h('span', { class: 'faint' }, `  github.com/${n.repository}`) : ' – no download address given'))),
+          h('p', { class: 'faint', style: { marginBottom: 0 } }, 'Both are installed switched off – switch them on and fill in their settings below.')),
+        [
+          h('button', { class: 'btn', type: 'button', onclick: () => close() }, 'Cancel'),
+          h('button', { class: 'btn primary', type: 'button', disabled: needs.some((n) => !n.repository), onclick: run(async () => {
+            d = await api('/plugins/github', { method: 'POST', body: { repo, withNeeds: true } });
+            close();
+            toast(`${names} and ${pname} installed – switch them on below`);
             renderList();
-          }) }, update ? `Update to v${b.version}` : 'Install'));
-    }) : h('span', { class: 'faint' }, 'None'));
-    fill(listEl, d.plugins.length ? d.plugins.map(pluginCard) : h('p', { class: 'empty' }, 'No plugins installed yet. Install one that ships with the server above, or upload your own.'));
+          }) }, `Install ${names} too`),
+        ]);
+    }
+  });
+  const repoInput = h('input', { type: 'text', placeholder: 'owner/repository', 'aria-label': 'GitHub repository', style: { flex: '1', minWidth: '200px' } });
+  const fromRepo = h('form', { class: 'row', style: { gap: '8px', marginTop: '14px' }, onsubmit: (e) => {
+    e.preventDefault();
+    if (repoInput.value.trim()) install(repoInput.value.trim())();
+  } },
+    repoInput,
+    h('button', { class: 'btn small', type: 'submit' }, 'Install from GitHub'));
+  function drawCatalog() {
+    const installedIds = new Map(d.plugins.map((p) => [p.id, p]));
+    fill(catalogEl,
+      catalogError ? h('p', { class: 'error', style: { margin: 0 } }, catalogError)
+        : !catalog ? h('span', { class: 'faint' }, 'Asking GitHub…')
+          : catalog.length ? catalog.map((c) => {
+            const inst = installedIds.get(c.id);
+            return h('div', { class: 'bundled' },
+              h('div', { class: 'grow' },
+                h('div', {}, h('b', {}, c.name), h('span', { class: 'faint' }, `  v${c.version}`)),
+                h('div', { class: 'faint', style: { fontSize: '13px' } }, c.description),
+                c.needs?.length ? h('div', { style: { fontSize: '13px' } }, `Needs: ${c.needs.map((n) => n.name).join(', ')}`) : null,
+                h('a', { href: `https://github.com/${c.repo}`, target: '_blank', rel: 'noopener', style: { fontSize: '12px' } }, `github.com/${c.repo} ↗`)),
+              inst ? h('span', { class: 'pill ok' }, 'Installed')
+                : h('button', { class: 'btn small primary', onclick: install(c.repo, c.name) }, 'Install'));
+          }) : h('span', { class: 'faint' }, 'No plugins found on GitHub.'),
+      fromRepo);
+  }
+
+  function renderList() {
+    drawCatalog();
+    fill(listEl, d.plugins.length ? d.plugins.map(pluginCard) : h('p', { class: 'empty' }, 'No plugins installed yet. Get one from GitHub above, or upload your own.'));
   }
 
   fill(main,
     head('Plugins', 'Plugins decide what the apps show: the menu, the screens, search results, what is played and how the player behaves. Each plugin has its own settings.',
+      h('button', { class: 'btn', onclick: run(async () => {
+        d = await api('/plugins/check-updates', { method: 'POST', body: {} });
+        const n = d.plugins.filter((p) => p.update).length;
+        toast(n ? `${n} plugin${n > 1 ? 's have' : ' has'} a new version` : 'Every plugin is up to date');
+        renderList();
+      }) }, 'Check for updates'),
       h('button', { class: 'btn primary', onclick: () => picker.click() }, 'Upload plugin (.zip)'), picker),
     h('p', { class: 'notice' }, h('b', {}, 'Good to know: '), 'plugins run with the same rights as the server. Only install plugins you wrote yourself or trust. New plugins are switched off until you switch them on.'),
-    h('section', { class: 'card', style: { margin: '16px 0' } }, h('h3', {}, 'Ships with the server'), bundledEl),
+    h('section', { class: 'card', style: { margin: '16px 0' } },
+      h('div', { class: 'row', style: { justifyContent: 'space-between', alignItems: 'center' } },
+        h('h3', { style: { margin: 0 } }, 'Get plugins'),
+        h('button', { class: 'btn small', onclick: () => { catalog = null; drawCatalog(); loadCatalog(true); } }, 'Refresh')),
+      h('p', { class: 'faint', style: { fontSize: '13px', margin: '6px 0 12px' } }, 'Downloaded from GitHub. Updates appear on each plugin below. To install someone else\'s plugin, write its repository (owner/name).'),
+      catalogEl),
     listEl);
   renderList();
+  loadCatalog(false);
 }
 
 // ---------------------------------------------------------------- app menu
+
+/**
+ * Drag to reorder: rows with data-index in [list] are moved by their grip (.grip) with the mouse or a finger.
+ * The other rows slide out of the way while dragging; onMove(from, to) is called when it is let go.
+ */
+function dragSort(list, onMove) {
+  list.addEventListener('pointerdown', (ev) => {
+    const grip = ev.target.closest('.grip');
+    if (!grip || ev.button > 0) return;
+    const rows = [...list.querySelectorAll('.menu-row[data-index]')];
+    const row = grip.closest('.menu-row');
+    const from = rows.indexOf(row);
+    if (from < 0) return;
+    ev.preventDefault();
+    grip.setPointerCapture(ev.pointerId);
+    const boxes = rows.map((r) => r.getBoundingClientRect());
+    const mids = boxes.map((b) => b.top + b.height / 2);
+    const step = rows.length > 1 ? Math.abs(boxes[1].top - boxes[0].top) : boxes[0].height;
+    const startY = ev.clientY;
+    let to = from;
+    row.classList.add('dragging');
+    list.classList.add('sorting');
+    const move = (e) => {
+      const dy = e.clientY - startY;
+      row.style.transform = `translateY(${dy}px)`;
+      const y = mids[from] + dy;
+      to = mids.filter((m, i) => i !== from && m < y).length;
+      rows.forEach((r, i) => {
+        if (i === from) return;
+        const shift = from < to && i > from && i <= to ? -step : from > to && i >= to && i < from ? step : 0;
+        r.style.transform = shift ? `translateY(${shift}px)` : '';
+      });
+    };
+    const end = () => {
+      grip.removeEventListener('pointermove', move);
+      grip.removeEventListener('pointerup', end);
+      grip.removeEventListener('pointercancel', end);
+      rows.forEach((r) => { r.style.transform = ''; });
+      row.classList.remove('dragging');
+      list.classList.remove('sorting');
+      if (to !== from) onMove(from, to);
+    };
+    grip.addEventListener('pointermove', move);
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+  });
+}
+
+/** Moves an item in a list from one place to another (in place). */
+const moveItem = (arr, from, to) => arr.splice(to, 0, arr.splice(from, 1)[0]);
+const grip = (title) => h('span', { class: 'grip', title: 'Drag to move', 'aria-hidden': 'true' }, '⋮⋮');
 
 async function renderMenu(main) {
   let entries = (await api('/menu')).entries;
@@ -442,7 +583,8 @@ async function renderMenu(main) {
       entries.map((e, i) => {
         const show = h('input', { type: 'checkbox', checked: !e.hidden, 'aria-label': `Show ${e.title}` });
         show.addEventListener('change', () => { e.hidden = !show.checked; save(); });
-        return h('div', { class: `menu-row ${e.hidden || !e.available ? 'dim' : ''}` },
+        return h('div', { class: `menu-row ${e.hidden || !e.available ? 'dim' : ''}`, 'data-index': i },
+          grip(e.title),
           h('div', { class: 'arrows' },
             h('button', { class: 'btn small', disabled: i === 0, 'aria-label': `Move ${e.title} up`, onclick: () => move(i, -1) }, '▲'),
             h('button', { class: 'btn small', disabled: i === entries.length - 1, 'aria-label': `Move ${e.title} down`, onclick: () => move(i, 1) }, '▼')),
@@ -454,8 +596,41 @@ async function renderMenu(main) {
       }),
       fixed('Settings'));
   }
-  fill(main, head('App menu', 'The order of the menu in the apps. Search is always at the top and Settings always at the bottom. Switch an entry off to hide it. Plugins hide entries themselves when they have nothing to show.'), list);
+  // The groups on the Favorites screen – plugins name them and suggest an order; it can be changed here.
+  let groups = (await api('/favorite-groups')).groups;
+  const glist = h('section', { class: 'card menu-list' });
+  const gsave = run(async () => {
+    groups = (await api('/favorite-groups', { method: 'PUT', body: { order: groups.map((g) => g.id) } })).groups;
+    gdraw();
+  });
+  const gmove = (i, dir) => {
+    const j = i + dir;
+    if (j < 0 || j >= groups.length) return;
+    [groups[i], groups[j]] = [groups[j], groups[i]];
+    gdraw();
+    gsave();
+  };
+  function gdraw() {
+    fill(glist, groups.map((g, i) => h('div', { class: 'menu-row', 'data-index': i },
+      grip(g.title),
+      h('div', { class: 'arrows' },
+        h('button', { class: 'btn small', disabled: i === 0, 'aria-label': `Move ${g.title} up`, onclick: () => gmove(i, -1) }, '▲'),
+        h('button', { class: 'btn small', disabled: i === groups.length - 1, 'aria-label': `Move ${g.title} down`, onclick: () => gmove(i, 1) }, '▼')),
+      h('div', { class: 'grow' },
+        h('b', {}, g.title),
+        h('span', { class: 'faint' }, g.pluginName ? `  ${g.pluginName}` : '  any plugin')))));
+  }
+
+  fill(main,
+    head('App menu', 'The order of the menu in the apps. Search is always at the top and Settings always at the bottom. Switch an entry off to hide it. Plugins hide entries themselves when they have nothing to show.'),
+    list,
+    h('h2', { class: 'section-title' }, 'Favorites screen'),
+    h('p', { class: 'faint', style: { maxWidth: '640px' } }, 'The order of the groups on the Favorites screen. Groups without any favourites are not shown in the apps. A plugin switched on later puts its groups where it suggests, until you move them.'),
+    glist);
+  dragSort(list, (from, to) => { moveItem(entries, from, to); draw(); save(); });
+  dragSort(glist, (from, to) => { moveItem(groups, from, to); gdraw(); gsave(); });
   draw();
+  gdraw();
 }
 
 // ---------------------------------------------------------------- translations

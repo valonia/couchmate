@@ -18,7 +18,10 @@ export class Streams {
     this.cache = new Map(); // "plugin:id:options" → { r, t }
   }
 
-  /** The plugin's answer for an item: { url, type: 'hls' | 'file', live, title, subtitle, image, kind, player }. */
+  /**
+   * The plugin's answer for an item: { url, type: 'hls' | 'file', audio, live, title, subtitle, image, kind, player }.
+   * `audio` (optional, type 'file' only): a separate audio file that plays together with `url` (video only).
+   */
   async resolve(plugin, id, options = {}, fresh = false) {
     const key = `${plugin}:${id}:${JSON.stringify(options)}`;
     const hit = this.cache.get(key);
@@ -27,13 +30,26 @@ export class Streams {
     const url = str(raw?.url);
     if (!/^https?:\/\//.test(url) && !url.startsWith(`/plugins/${plugin}/`)) throw new Error('The plugin returned no stream (is it on air right now?)');
     const type = raw.type === 'hls' || raw.type === 'file' ? raw.type : /\.m3u8(\?|$)/i.test(url) ? 'hls' : 'file';
-    const r = { ...raw, url, type };
+    const audio = str(raw.audio);
+    const okAudio = type === 'file' && (/^https?:\/\//.test(audio) || audio.startsWith(`/plugins/${plugin}/`));
+    const r = { ...raw, url, type, audio: okAudio ? audio : null };
     this.cache.set(key, { r, t: Date.now() });
     if (this.cache.size > 200) this.cache.delete(this.cache.keys().next().value);
     return r;
   }
 
   /** The room changed what plays – forget answers for anything else (they may hold provider connections). */
+  /** Asks the plugin for an item's stream in the background (at most a few at a time), so it is quick later. */
+  prepare(plugin, id) {
+    this.preparing ??= new Set();
+    const key = `${plugin}:${id}`;
+    if (this.preparing.has(key) || this.preparing.size >= 3) return;
+    this.preparing.add(key);
+    this.resolve(plugin, id, this.plugins.playerOptions(plugin, new URLSearchParams()))
+      .catch(() => {})
+      .finally(() => this.preparing.delete(key));
+  }
+
   playing(media) {
     const keep = media ? `${media.plugin}:${media.id}:` : null;
     for (const k of this.cache.keys()) if (!keep || !k.startsWith(keep)) this.cache.delete(k);
@@ -45,6 +61,11 @@ export class Streams {
     const options = this.plugins.playerOptions(plugin, params);
     try {
       const r = await this.resolve(plugin, id, options);
+      // ?part=audio – the separate audio file that goes with the video.
+      if (params.get('part') === 'audio') {
+        if (!r.audio) return json(res, 404, { error: 'No separate audio' });
+        return redirect(res, r.audio.startsWith('/') ? withPin(r.audio, params.get('pin')) : r.audio);
+      }
       if (r.url.startsWith('/')) return redirect(res, withPin(r.url, params.get('pin')));
       if (r.type !== 'hls') return redirect(res, r.url);
       const { lines, variants, all } = await this.playlist(plugin, id, options);
