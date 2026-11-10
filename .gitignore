@@ -1,0 +1,10 @@
+# Secrets
+.env
+*.env
+!.env.example
+
+# Node
+node_modules/
+
+# Server data (settings, plugins, favourites …) when run without Docker
+data/
