@@ -18,7 +18,7 @@ player reacts to the remote.
 | Repository | |
 |---|---|
 | **couchmate** (this one) | The server, and [how to write a plugin](PLUGINS.md) |
-| [couchmate-android](https://github.com/valonia/couchmate-android) | The Android TV app |
+| [couchmate-androidtv](https://github.com/valonia/couchmate-androidtv) | The Android TV app |
 | [couchmate-twitch](https://github.com/valonia/couchmate-twitch), [couchmate-youtube](https://github.com/valonia/couchmate-youtube), [couchmate-iptv-dispatcharr](https://github.com/valonia/couchmate-iptv-dispatcharr), [couchmate-spotify-youtube](https://github.com/valonia/couchmate-spotify-youtube) | Plugins – installed from the admin panel |
 
 ## 1. Start the server
