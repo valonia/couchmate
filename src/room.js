@@ -12,6 +12,7 @@ import { Translator, T } from './i18n.js';
 
 const PREPARE_AHEAD_S = 30; // music: the next item is prepared this long before "next" shows
 const START_DELAY_MS = 800; // everyone starts this long after "go", so they start together
+const EMPTY_PAUSE_MS = 60 * 1000; // nobody connected this long: pause (a short drop-out or an app restart does not)
 
 const now = () => Date.now();
 
@@ -42,6 +43,7 @@ export class Room {
       setInterval(() => this.checkEnded(), 1000),
       setInterval(() => this.checkStatus(), 2 * 60 * 1000), // e.g. which favourite channels are live
       setInterval(() => this.checkReminders(), 1000),
+      setInterval(() => this.checkEmpty(), 5000),
       setInterval(() => this.flushChat(), 800),
       setInterval(() => this.heartbeat(), 20000),
       setInterval(() => { if (this.state.media && !this.state.paused) { this.history.progress(this.state.media, this.position()); this.writeRoom(); } }, 15000),
@@ -226,6 +228,18 @@ export class Room {
     } else if (s.paused && !s.waiting) {
       this.mutate(by, 'play', () => { s.waiting = true; });
     }
+  }
+
+  /** Nobody has had an app open for a minute: pause where it is, so nothing plays on (or moves on to the next
+   *  episode or song) for an empty room, and everyone comes back to where they stopped. Live TV is left alone –
+   *  there is nothing to come back to there. */
+  checkEmpty() {
+    if ([...this.clients.values()].some((c) => c.name)) { this.emptySince = null; return; }
+    this.emptySince ??= now();
+    const s = this.state;
+    if (now() - this.emptySince < EMPTY_PAUSE_MS || !s.media || s.media.live || (s.paused && !s.waiting)) return;
+    this.log('[room] nobody is watching – paused');
+    this.pause(null);
   }
 
   pause(by) {
