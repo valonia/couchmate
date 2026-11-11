@@ -10,6 +10,48 @@ export class History {
     this.max = max;
     this.store = new JsonFile(file, [], { delay: 2000 });
     this.store.data = this.store.data.filter((e) => e && e.plugin && e.id).slice(0, max);
+    // How far everything that is not live was watched – without the history's limit, so a long series keeps
+    // which episodes were seen. "<plugin>:<id>" → { p: position, d: length, t: when } (seconds, ms).
+    this.watchStore = new JsonFile(file.replace(/history\.json$/, 'watched.json'), {}, { delay: 5000 });
+    // The first time: start from what the history already knows.
+    if (!Object.keys(this.watchStore.data).length && this.entries.length) {
+      for (const e of [...this.entries].reverse()) {
+        if (!e.live) this.watchStore.data[e.key] = { p: Math.round(e.position || 0), ...(e.duration > 0 ? { d: Math.round(e.duration) } : {}), t: e.lastAt || 0 };
+      }
+      this.watchStore.save();
+    }
+  }
+
+  /** Remembers how far an item got (and its length, when known). */
+  note(media, { position, duration } = {}) {
+    if (!media || media.live) return;
+    const key = refKey(media.plugin, media.id);
+    const all = this.watchStore.data;
+    const w = all[key] || {};
+    if (Number.isFinite(position)) w.p = Math.max(0, Math.round(position));
+    if (duration > 0) w.d = Math.round(duration);
+    w.t = Date.now();
+    delete all[key];
+    all[key] = w; // newest last – the oldest go first when there are too many
+    const keys = Object.keys(all);
+    if (keys.length > 20000) for (const k of keys.slice(0, keys.length - 20000)) delete all[k];
+    this.watchStore.save();
+  }
+
+  /**
+   * How far a plugin's items were watched: { id: { position, duration, finished, at } } for those that were
+   * started. Finished = the end was reached (the last few minutes – where the credits usually are).
+   */
+  watched(plugin, ids) {
+    const out = {};
+    for (const id of ids) {
+      const w = this.watchStore.data[refKey(plugin, id)];
+      if (!w) continue;
+      const d = w.d || 0;
+      const p = w.p || 0;
+      out[id] = { position: p, duration: d || null, finished: d > 0 && d - p <= Math.min(300, d * 0.08), at: w.t || 0 };
+    }
+    return out;
   }
 
   get entries() { return this.store.data; }
@@ -39,10 +81,12 @@ export class History {
     };
     this.store.data = [entry, ...this.entries.filter((e) => e.key !== key)].slice(0, this.max);
     this.store.save();
+    this.note(media, { position: entry.position });
   }
 
   progress(media, position) {
     if (!media || media.live || !Number.isFinite(position)) return;
+    this.note(media, { position });
     const e = this.find(media);
     if (!e) return;
     e.position = Math.max(0, position);
@@ -54,6 +98,7 @@ export class History {
 
   setDuration(media, duration) {
     if (!media || media.live || !(duration > 0)) return;
+    this.note(media, { duration });
     const e = this.find(media);
     if (e && e.duration !== duration) { e.duration = duration; this.store.save(); }
   }
@@ -74,5 +119,5 @@ export class History {
     this.store.save();
   }
 
-  flush() { this.store.flush(); }
+  flush() { this.store.flush(); this.watchStore.flush(); }
 }

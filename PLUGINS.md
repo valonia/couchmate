@@ -390,6 +390,7 @@ Without an overlay the app shows its own.
 | `api.use(pluginId, name, …args)` | calls a function another plugin offers – throws if it is not installed and on |
 | `api.has(pluginId, name)` | whether that plugin is on and offers that function |
 | `api.providers(name)` | the plugins that are on and offer a function – e.g. every extension of yours |
+| `api.watched(ids)` | how far the room got in your items: `{ id: { position, duration, finished, at } }` for those that were started – e.g. tick seen episodes and carry on where you were (play with `position`) |
 | `api.room` | `state()`, `members()`, `load({ plugin, id, title… })`, `play()`, `pause()`, `seek(seconds)`, `stop()`, `notify(text)` |
 
 ## Plugins that build on each other

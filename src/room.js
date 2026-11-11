@@ -839,6 +839,12 @@ export class Room {
       seek: (position, by = 'Admin') => this.seek(by, position),
       stop: (by = 'Admin') => this.stop(by),
       kick: (id) => this.kick(id),
+      /** How far a plugin's items were watched (see History.watched). Includes the one playing right now. */
+      watched: (plugin, ids) => {
+        const s = this.state;
+        if (s.media && !s.media.live && s.media.plugin === plugin) this.history.note(s.media, { position: this.position() });
+        return this.history.watched(plugin, ids);
+      },
       /** A short message to every app (api.t() text is translated per device). */
       notify: (text) => this.broadcast({ type: 'notice', text: typeof text === 'object' ? text : clean(text, 300) }),
     };

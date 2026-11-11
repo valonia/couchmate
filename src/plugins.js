@@ -201,6 +201,13 @@ export class PluginHost {
        * off, or does not offer it – check first with api.has(pluginId, name).
        */
       use: (pluginId, name, ...args) => this.useService(String(pluginId), String(name), args),
+      /**
+       * How far the room got in this plugin's items: api.watched(['ep-1', 'ep-2']) →
+       * { 'ep-1': { position, duration, finished, at } } for those that were started (seconds; at = ms).
+       */
+      watched: (ids) => (typeof this.room?.watched === 'function'
+        ? this.room.watched(p.id, [...new Set((Array.isArray(ids) ? ids : [ids]).map(String))].slice(0, 2000))
+        : {}),
       has: (pluginId, name) => Boolean(this.serviceOf(String(pluginId), String(name))),
       /** The switched-on plugins that offer a function (api.expose) – e.g. every extension of this plugin. */
       providers: (name) => [...this.plugins.values()].filter((x) => x.enabled && x.services?.has(String(name))).map((x) => x.id),
