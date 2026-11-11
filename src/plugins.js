@@ -12,7 +12,7 @@ import { proxy } from './streams.js';
 
 const KEY_ACTIONS = ['pause', 'settings', 'chat', 'info', 'channels', 'channel_up', 'channel_down', 'seek_back', 'seek_forward', 'queue', 'none'];
 const KEYS = ['ok', 'up', 'down', 'left', 'right'];
-const SECTION_TYPES = ['quality', 'chat', 'audio', 'subtitles', 'choice', 'actions'];
+const SECTION_TYPES = ['quality', 'chat', 'audio', 'subtitles', 'captions', 'choice', 'actions'];
 const ROUTE_AUTH = ['pin', 'admin', 'public'];
 
 /** Text a plugin sends to the apps: a plain string (never translated) or api.t('…') (translated). */

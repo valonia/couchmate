@@ -181,6 +181,8 @@ export class Room {
       type: r.type,
       // The video has a separate audio file: the apps fetch it from the same address with ?part=audio.
       audio: Boolean(r.audio),
+      // The plugin has captions for it: apps with CC on fetch them from the same address with ?part=captions.
+      captions: Boolean(r.captions),
       chat: live && this.plugins.has(plugin, 'chat'),
       // The plugin decides the player's keys and settings; the apps draw them.
       player: this.plugins.playerSpec(plugin, r.player),

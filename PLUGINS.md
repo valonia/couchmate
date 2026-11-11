@@ -295,6 +295,7 @@ async resolve(itemId, { options }) {
     live: true,
     title: '…', subtitle: '…', image: '…', kind: 'stream',   // optional, wins over what the app sent
     player: { … },                     // optional: a player for this item only
+    captions: '/plugins/<id>/cc/…',    // optional: captions as WebVTT (see below)
   };
 }
 ```
@@ -302,6 +303,12 @@ async resolve(itemId, { options }) {
 The apps never get this address directly. They play `/stream/<plugin>/<item id>`, and the server calls
 `resolve` again when the answer is older than 8 minutes. That keeps expiring addresses working for people
 who join later. HLS playlists are passed on with absolute addresses; anything else is a redirect.
+
+**Captions.** Return `captions` (an address of your plugin's, or https) and add `{ type: 'captions', title: 'CC' }`
+to the player's settings: the panel gets one switch, CC on/off, saved on each TV for every item that has
+captions. Apps with CC on fetch the address with `?lang=<the TV's language>` added; answer with a WebVTT file
+(`text/vtt`), or 404 when there is nothing for that item. Your plugin picks the best text – the YouTube plugin
+takes the uploader's subtitles, then synced lyrics for songs, then YouTube's automatic captions.
 
 When an item ends, the server calls `next(itemId)` and, if it returns an item, shows "next episode" and
 plays it after the countdown set in the admin panel.
@@ -321,6 +328,7 @@ player: {
     { type: 'quality', title: api.t('Quality') },      // the stream's qualities (from the HLS playlist)
     { type: 'chat', title: api.t('Chat') },            // show/hide the chat (needs chat())
     { type: 'audio' }, { type: 'subtitles' },          // tracks in the stream
+    { type: 'captions', title: 'CC' },                 // CC on/off – the captions resolve() gives (see above)
     { type: 'choice', id: 'latency', title: api.t('Latency'), default: 'low',
       options: [{ id: 'low', label: api.t('Low') }, { id: 'normal', label: api.t('Normal') }] },
                                                        // saved per device, sent to resolve() as options.latency

@@ -32,7 +32,10 @@ export class Streams {
     const type = raw.type === 'hls' || raw.type === 'file' ? raw.type : /\.m3u8(\?|$)/i.test(url) ? 'hls' : 'file';
     const audio = str(raw.audio);
     const okAudio = type === 'file' && (/^https?:\/\//.test(audio) || audio.startsWith(`/plugins/${plugin}/`));
-    const r = { ...raw, url, type, audio: okAudio ? audio : null };
+    // Captions (WebVTT) the plugin can give for this item – fetched only by apps that have CC switched on.
+    const captions = str(raw.captions);
+    const okCaptions = /^https?:\/\//.test(captions) || captions.startsWith(`/plugins/${plugin}/`);
+    const r = { ...raw, url, type, audio: okAudio ? audio : null, captions: okCaptions ? captions : null };
     this.cache.set(key, { r, t: Date.now() });
     if (this.cache.size > 200) this.cache.delete(this.cache.keys().next().value);
     return r;
@@ -65,6 +68,13 @@ export class Streams {
       if (params.get('part') === 'audio') {
         if (!r.audio) return json(res, 404, { error: 'No separate audio' });
         return redirect(res, r.audio.startsWith('/') ? withPin(r.audio, params.get('pin')) : r.audio);
+      }
+      // ?part=captions&lang=sv – the plugin's captions (WebVTT), in the app's language where it has a choice.
+      if (params.get('part') === 'captions') {
+        if (!r.captions) return json(res, 404, { error: 'No captions' });
+        const lang = /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/.test(params.get('lang') || '') ? params.get('lang') : null;
+        const to = lang ? `${r.captions}${r.captions.includes('?') ? '&' : '?'}lang=${lang}` : r.captions;
+        return redirect(res, to.startsWith('/') ? withPin(to, params.get('pin')) : to);
       }
       if (r.url.startsWith('/')) return redirect(res, withPin(r.url, params.get('pin')));
       if (r.type !== 'hls') return redirect(res, r.url);
