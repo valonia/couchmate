@@ -22,14 +22,15 @@ export class History {
     }
   }
 
-  /** Remembers how far an item got (and its length, when known). */
-  note(media, { position, duration } = {}) {
+  /** Remembers how far an item got (and its length, and who started it, when known). */
+  note(media, { position, duration, by } = {}) {
     if (!media || media.live) return;
     const key = refKey(media.plugin, media.id);
     const all = this.watchStore.data;
     const w = all[key] || {};
     if (Number.isFinite(position)) w.p = Math.max(0, Math.round(position));
     if (duration > 0) w.d = Math.round(duration);
+    if (by) w.b = String(by).slice(0, 40);
     w.t = Date.now();
     delete all[key];
     all[key] = w; // newest last – the oldest go first when there are too many
@@ -39,17 +40,19 @@ export class History {
   }
 
   /**
-   * How far a plugin's items were watched: { id: { position, duration, finished, at } } for those that were
-   * started. Finished = the end was reached (the last few minutes – where the credits usually are).
+   * How far a plugin's items were watched: { id: { position, duration, finished, at, by } } for those that were
+   * started (by = who started it). Finished = the end was reached (the last few minutes – where the credits are).
    */
   watched(plugin, ids) {
     const out = {};
     for (const id of ids) {
-      const w = this.watchStore.data[refKey(plugin, id)];
+      const key = refKey(plugin, id);
+      const w = this.watchStore.data[key];
       if (!w) continue;
       const d = w.d || 0;
       const p = w.p || 0;
-      out[id] = { position: p, duration: d || null, finished: d > 0 && d - p <= Math.min(300, d * 0.08), at: w.t || 0 };
+      const by = w.b || this.entries.find((e) => e.key === key)?.startedBy || null;
+      out[id] = { position: p, duration: d || null, finished: d > 0 && d - p <= Math.min(300, d * 0.08), at: w.t || 0, by };
     }
     return out;
   }
@@ -81,7 +84,7 @@ export class History {
     };
     this.store.data = [entry, ...this.entries.filter((e) => e.key !== key)].slice(0, this.max);
     this.store.save();
-    this.note(media, { position: entry.position });
+    this.note(media, { position: entry.position, by });
   }
 
   progress(media, position) {
