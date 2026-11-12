@@ -249,14 +249,23 @@ async function renderOverview(main) {
           const drift = x.drift == null ? null : Math.round(x.drift * 1000);
           const cls = drift == null ? 'faint' : Math.abs(drift) < 300 ? 'drift-ok' : Math.abs(drift) < 1000 ? 'drift-warn' : 'drift-bad';
           return h('tr', {},
-            h('td', {}, h('b', {}, x.name)),
+            h('td', {}, h('b', {}, x.name), x.ownName ? h('div', { class: 'faint' }, `calls itself ${x.ownName}`) : null),
             h('td', { class: 'muted' }, x.device || '–'),
             h('td', { class: 'muted' }, x.lang || 'en'),
             h('td', {}, h('span', { class: `pill ${x.watching ? 'ok' : ''}` }, x.watching ? 'Watching' : 'Browsing')),
             h('td', { class: `num ${cls}` }, drift == null ? '–' : `${drift > 0 ? '+' : ''}${drift} ms`),
             h('td', { class: 'muted' }, x.status || '–'),
             h('td', { class: 'faint' }, x.reportAge == null ? '–' : `${x.reportAge} s ago`),
-            h('td', { class: 'act' }, confirmBtn('Disconnect', 'Sure?', () => api('/room/kick', { method: 'POST', body: { id: x.id } }).then(update))));
+            h('td', { class: 'act' },
+              h('button', {
+                class: 'btn small',
+                onclick: () => {
+                  const name = prompt(`New name for ${x.name} (${x.device || 'this device'}). Everyone sees it, also when it reconnects. Empty = its own name again.`, x.name);
+                  if (name !== null) api('/room/rename', { method: 'POST', body: { id: x.id, name } }).then(update).catch((e) => alert(e.message));
+                },
+              }, 'Rename'),
+              ' ',
+              confirmBtn('Disconnect', 'Sure?', () => api('/room/kick', { method: 'POST', body: { id: x.id } }).then(update))));
         })))) : h('p', { class: 'empty' }, 'No one is connected.'));
 
     fill(server, h('h3', {}, 'Server'), h('dl', { class: 'kv' },

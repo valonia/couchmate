@@ -182,11 +182,12 @@ export function createAdmin(ctx) {
     }
 
     // ---- control the room
-    const roomCmd = /^\/room\/(play|pause|stop|seek|kick)$/.exec(sub);
+    const roomCmd = /^\/room\/(play|pause|stop|seek|kick|rename)$/.exec(sub);
     if (roomCmd && method === 'POST') {
       const b = await readJson(req, 10000);
       const c = roomCmd[1];
       if (c === 'seek') roomApi.seek(Number(b.position) || 0);
+      else if (c === 'rename') { if (!roomApi.rename(String(b.id || ''), String(b.name || ''))) return json(res, 404, { error: 'Device not found' }); }
       else if (c === 'kick') { if (!roomApi.kick(String(b.id || ''))) return json(res, 404, { error: 'Device not found' }); }
       else roomApi[c]();
       return json(res, 200, { ok: true });

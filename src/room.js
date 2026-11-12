@@ -6,8 +6,9 @@
 // the plugin's resolve() decides where the stream is.
 
 import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { clean, str, ITEM_ID, SAFE_ID } from './util.js';
+import { clean, str, ITEM_ID, SAFE_ID, JsonFile } from './util.js';
 import { Translator, T } from './i18n.js';
 
 const PREPARE_AHEAD_S = 30; // music: the next item is prepared this long before "next" shows
@@ -34,6 +35,8 @@ export class Room {
       reminder: null, // { key, title, start, channel, switchAt } – switches everyone at switchAt
     };
     this.clients = new Map(); // ws → client
+    // Names the admin gave: "<name the app sends>|<device>" → the name everyone sees (the apps need no update).
+    this.aliases = new JsonFile(path.join(path.dirname(roomFile), 'aliases.json'), {});
     this.waitTimer = null;
     this.upNextTimer = null;
     this.checkingNext = false;
@@ -83,6 +86,7 @@ export class Room {
   members() {
     return [...this.clients.values()].filter((c) => c.name).map((c) => ({
       id: c.id, name: c.name, device: c.device, watching: c.watching, lang: c.lang || 'en',
+      ownName: c.sentName && c.sentName !== c.name ? c.sentName : null, // the name the app itself uses, when renamed
       // Last report from the device: position and drift (s) against where it should be.
       position: c.position ?? null, drift: c.drift ?? null, status: c.status ?? null,
       reportAge: c.reportedAt ? Math.round((now() - c.reportedAt) / 1000) : null,
@@ -271,8 +275,9 @@ export class Room {
     const s = this.state;
     switch (msg.type) {
       case 'hello':
-        c.name = clean(msg.name, 40) || 'Guest';
+        c.sentName = clean(msg.name, 40) || 'Guest';
         c.device = clean(msg.device, 40);
+        c.name = this.aliases.data[`${c.sentName}|${c.device}`] || c.sentName;
         c.lang = Translator.normalize(msg.lang);
         this.translator.prepare(c.lang);
         this.send(c, { type: 'translations_version', lang: c.lang, version: this.translator.version(c.lang) });
@@ -468,6 +473,22 @@ export class Room {
       c.alive = false;
       ws.ping();
     }
+  }
+
+  /** The admin renames a device: everyone sees the new name, also after it reconnects. Empty = its own name again. */
+  rename(id, name) {
+    const c = [...this.clients.values()].find((x) => x.id === id && x.name);
+    if (!c) return false;
+    const key = `${c.sentName}|${c.device}`;
+    const to = clean(name, 40);
+    if (!to || to === c.sentName) delete this.aliases.data[key];
+    else this.aliases.data[key] = to;
+    this.aliases.save();
+    const before = c.name;
+    c.name = to || c.sentName;
+    this.log(`[admin] renamed ${before} to ${c.name}`);
+    this.broadcastMembers();
+    return true;
   }
 
   kick(id) {
@@ -839,6 +860,7 @@ export class Room {
       seek: (position, by = 'Admin') => this.seek(by, position),
       stop: (by = 'Admin') => this.stop(by),
       kick: (id) => this.kick(id),
+      rename: (id, name) => this.rename(id, name),
       /** How far a plugin's items were watched (see History.watched). Includes the one playing right now. */
       watched: (plugin, ids) => {
         const s = this.state;
