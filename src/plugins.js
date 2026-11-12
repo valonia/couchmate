@@ -411,11 +411,27 @@ export class PluginHost {
         p.updateError = null;
         p.update = rel?.version && isNewer(rel.version, p.meta?.version) ? rel : null;
         if (p.update) this.log(`[plugins] ${p.meta?.name || p.id}: version ${rel.version} is out (installed: ${p.meta?.version || '?'})`);
-        if (p.update && install && p.autoUpdate) await this.installUpdate(p.id);
+        if (p.update && install && p.autoUpdate) {
+          // Never while someone is in – it waits until the room has been empty for a minute.
+          if (this.busy?.()) {
+            if (!p.updateWaiting) this.log(`[plugins] ${p.meta?.name || p.id}: updating to ${rel.version} once nobody is watching`);
+            p.updateWaiting = true;
+          } else await this.installUpdate(p.id);
+        }
       } catch (e) {
         p.updateError = e.message;
         this.log(`[plugins] ${p.meta?.name || p.id}: could not check for updates: ${e.message}`);
       }
+    }
+  }
+
+  /** Automatic updates that waited for an empty room. */
+  async installWaitingUpdates() {
+    for (const p of [...this.plugins.values()]) {
+      if (!p.updateWaiting || !p.update || !p.autoUpdate) continue;
+      if (this.busy?.()) return;
+      p.updateWaiting = false;
+      await this.installUpdate(p.id).catch((e) => this.log(`[plugins] ${p.meta?.name || p.id}: update failed: ${e.message}`));
     }
   }
 

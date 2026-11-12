@@ -160,7 +160,8 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
   try {
-    if (p === '/health') return json(res, 200, { ok: true });
+    // For scripts on the server (e.g. updating it only when nobody is in): how many apps are connected.
+    if (p === '/health') return json(res, 200, { ok: true, connected: room.members().length });
     if (p === '/' && req.method === 'GET') { res.writeHead(302, { location: '/download' }); return res.end(); }
     // What the app's connect screen asks first (no PIN needed).
     if (p === '/api/info') return json(res, 200, { app: 'Couchmate', name: settings.get('serverName') || 'Couchmate', version: VERSION, ready: Boolean(pin()) });
@@ -257,6 +258,9 @@ server.listen(cfg.port, async () => {
   if (!admin.hasPassword()) console.warn('Open /admin in a browser to create the admin password.');
   if (!pin()) console.warn('No PIN code set yet – the apps cannot connect until you set one in the admin panel.');
   await plugins.loadAll().catch((e) => console.warn('[plugin]', e.message));
+  // Automatic updates never happen while someone is in: they wait until the room has been empty for a minute.
+  plugins.busy = () => room.occupied();
+  room.onEmpty = () => plugins.installWaitingUpdates().catch((e) => console.warn('[plugins] update:', e.message));
   // New plugin versions on GitHub: a minute after starting, then every 6 hours.
   const check = () => plugins.checkUpdates().catch((e) => console.warn('[plugins] update check:', e.message));
   setTimeout(check, 60 * 1000).unref?.();

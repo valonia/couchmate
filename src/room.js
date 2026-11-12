@@ -240,13 +240,19 @@ export class Room {
    *  episode or song) for an empty room, and everyone comes back to where they stopped. Live TV is left alone –
    *  there is nothing to come back to there. */
   checkEmpty() {
-    if ([...this.clients.values()].some((c) => c.name)) { this.emptySince = null; return; }
+    if ([...this.clients.values()].some((c) => c.name)) { this.emptySince = null; this.emptyNoticed = false; return; }
     this.emptySince ??= now();
+    if (now() - this.emptySince < EMPTY_PAUSE_MS) return;
+    // Empty for a minute: things that wait until nobody is in (e.g. plugin updates) may go ahead now.
+    if (!this.emptyNoticed) { this.emptyNoticed = true; this.onEmpty?.(); }
     const s = this.state;
-    if (now() - this.emptySince < EMPTY_PAUSE_MS || !s.media || s.media.live || (s.paused && !s.waiting)) return;
+    if (!s.media || s.media.live || (s.paused && !s.waiting)) return;
     this.log('[room] nobody is watching – paused');
     this.pause(null);
   }
+
+  /** Whether any app is connected (updates wait until nobody is). */
+  occupied() { return [...this.clients.values()].some((c) => c.name); }
 
   pause(by) {
     const s = this.state;
