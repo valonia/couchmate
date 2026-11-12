@@ -277,7 +277,19 @@ export class Room {
       case 'hello':
         c.sentName = clean(msg.name, 40) || 'Guest';
         c.device = clean(msg.device, 40);
-        c.name = this.aliases.data[`${c.sentName}|${c.device}`] || c.sentName;
+        // Newer apps send a fixed id of their own; older ones are known by name and device.
+        c.deviceId = /^[A-Za-z0-9-]{8,64}$/.test(str(msg.deviceId)) ? str(msg.deviceId) : null;
+        c.aliasKey = c.deviceId ? `id:${c.deviceId}` : `${c.sentName}|${c.device}`;
+        // Renamed while it still had an older app: the name moves over to its id.
+        const legacy = `${c.sentName}|${c.device}`;
+        if (c.deviceId && !this.aliases.data[c.aliasKey] && this.aliases.data[legacy]) {
+          this.aliases.data[c.aliasKey] = this.aliases.data[legacy];
+          delete this.aliases.data[legacy];
+          this.aliases.save();
+        }
+        c.name = this.aliases.data[c.aliasKey] || c.sentName;
+        // Renamed by the admin: newer apps take the name over in their own settings (older ones just keep theirs).
+        if (c.name !== c.sentName) this.send(c, { type: 'name', name: c.name });
         c.lang = Translator.normalize(msg.lang);
         this.translator.prepare(c.lang);
         this.send(c, { type: 'translations_version', lang: c.lang, version: this.translator.version(c.lang) });
@@ -479,7 +491,7 @@ export class Room {
   rename(id, name) {
     const c = [...this.clients.values()].find((x) => x.id === id && x.name);
     if (!c) return false;
-    const key = `${c.sentName}|${c.device}`;
+    const key = c.aliasKey;
     const to = clean(name, 40);
     if (!to || to === c.sentName) delete this.aliases.data[key];
     else this.aliases.data[key] = to;
@@ -487,6 +499,7 @@ export class Room {
     const before = c.name;
     c.name = to || c.sentName;
     this.log(`[admin] renamed ${before} to ${c.name}`);
+    this.send(c, { type: 'name', name: c.name }); // the app shows it in its settings too
     this.broadcastMembers();
     return true;
   }
