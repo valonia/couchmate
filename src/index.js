@@ -123,7 +123,8 @@ async function searchAll(q, ctx) {
   const list = [...new Set(plugins.menu().map((m) => m.plugin))].filter((id) => plugins.has(id, 'search'));
   const results = await Promise.all(list.map(async (id) => {
     try {
-      const sections = plugins.searchResults(id, await plugins.call(id, 'search', [q, ctx], 8000));
+      // 15 s: YouTube's searches go through yt-dlp and take a few seconds each.
+      const sections = plugins.searchResults(id, await plugins.call(id, 'search', [q, ctx], 15000));
       return sections.length ? { plugin: id, name: plugins.plugins.get(id)?.meta?.name || id, sections } : null;
     } catch (e) {
       console.warn(`[search] ${id}: ${e.message}`);
