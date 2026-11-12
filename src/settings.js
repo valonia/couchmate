@@ -31,6 +31,10 @@ export const SCHEMA = [
   // ---- Translation
   { key: 'translation', group: 'translation', type: 'bool', def: true,
     label: 'Translate the apps', help: 'Translates menus and buttons from English into each device\'s language, on this server. Nothing is sent anywhere else.' },
+
+  // ---- Developer
+  { key: 'devMode', group: 'developer', type: 'bool', def: false, label: 'Developer mode',
+    help: 'For making plugins: plugins with automatic updates are updated as soon as a new version is out, even while someone is watching (it restarts the plugin), and the server looks for new versions every 5 minutes instead of every 6 hours.' },
 ];
 
 export const GROUPS = [
@@ -39,6 +43,7 @@ export const GROUPS = [
   { key: 'reminders', label: 'Reminders' },
   { key: 'favorites', label: 'Favourites' },
   { key: 'translation', label: 'Translation' },
+  { key: 'developer', label: 'Developer' },
 ];
 
 export class Settings {

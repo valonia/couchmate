@@ -259,12 +259,14 @@ server.listen(cfg.port, async () => {
   if (!admin.hasPassword()) console.warn('Open /admin in a browser to create the admin password.');
   if (!pin()) console.warn('No PIN code set yet – the apps cannot connect until you set one in the admin panel.');
   await plugins.loadAll().catch((e) => console.warn('[plugin]', e.message));
-  // Automatic updates never happen while someone is in: they wait until the room has been empty for a minute.
-  plugins.busy = () => room.occupied();
+  // Automatic updates never happen while someone is in: they wait until the room has been empty for a minute –
+  // unless developer mode is on (admin panel → Settings → Developer), for someone making plugins.
+  plugins.busy = () => !settings.get('devMode') && room.occupied();
   room.onEmpty = () => plugins.installWaitingUpdates().catch((e) => console.warn('[plugins] update:', e.message));
-  // New plugin versions on GitHub: a minute after starting, then every 6 hours.
+  // New plugin versions on GitHub: a minute after starting, then every 6 hours (every 5 minutes in developer mode).
   const check = () => plugins.checkUpdates().catch((e) => console.warn('[plugins] update check:', e.message));
   setTimeout(check, 60 * 1000).unref?.();
   setInterval(check, 6 * 60 * 60 * 1000).unref?.();
+  setInterval(() => { if (settings.get('devMode')) check(); }, 5 * 60 * 1000).unref?.();
   await room.restore();
 });
