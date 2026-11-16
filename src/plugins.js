@@ -3,6 +3,7 @@
 // See plugins/PLUGINS.md for the full contract.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { unzip } from './unzip.js';
@@ -115,6 +116,18 @@ export class PluginHost {
     return { manifest, file: path.join(dir, main) };
   }
 
+  /** Copies the plugin's folder to a new place to import it from (older copies of it are removed). */
+  runCopy(id, dir, file) {
+    const root = path.join(os.tmpdir(), 'couchmate-plugin-runs');
+    fs.mkdirSync(root, { recursive: true });
+    for (const old of fs.readdirSync(root)) {
+      if (old.startsWith(`${id}-`)) fs.rmSync(path.join(root, old), { recursive: true, force: true });
+    }
+    const target = path.join(root, `${id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    fs.cpSync(dir, target, { recursive: true });
+    return path.join(target, path.relative(dir, file));
+  }
+
   async load(id) {
     const saved = this.state[id] || {};
     const p = this.plugins.get(id) || { id, enabled: Boolean(saved.enabled), settings: saved.settings || {}, autoUpdate: Boolean(saved.autoUpdate) };
@@ -125,8 +138,10 @@ export class PluginHost {
       p.dir = path.join(this.dir, id);
       const { manifest, file } = this.readManifest(p.dir);
       p.manifest = manifest;
-      // The query string forces a fresh import when the file has been replaced.
-      const mod = await import(`${pathToFileURL(file).href}?v=${fs.statSync(file).mtimeMs}`);
+      // Node keeps every module it has imported, by address. A new address for index.mjs alone is not enough:
+      // the files it imports (./views.mjs …) would still come from the old version. So each load runs from its
+      // own fresh copy of the plugin's folder (the plugin's data stays where it is).
+      const mod = await import(pathToFileURL(this.runCopy(id, p.dir, file)).href);
       p.meta = {
         name: manifest.name || id,
         version: manifest.version || '',
