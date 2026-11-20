@@ -19,7 +19,8 @@ player reacts to the remote.
 |---|---|
 | **couchmate** (this one) | The server, and [how to write a plugin](PLUGINS.md) |
 | [couchmate-androidtv](https://github.com/valonia/couchmate-androidtv) | The Android TV app |
-| [couchmate-twitch](https://github.com/valonia/couchmate-twitch), [couchmate-youtube](https://github.com/valonia/couchmate-youtube), [couchmate-iptv-dispatcharr](https://github.com/valonia/couchmate-iptv-dispatcharr), [couchmate-spotify-youtube](https://github.com/valonia/couchmate-spotify-youtube) | Plugins – installed from the admin panel |
+| [couchmate-appletv](https://github.com/valonia/couchmate-appletv) | The Apple TV app |
+| [couchmate-twitch](https://github.com/valonia/couchmate-twitch), [couchmate-youtube](https://github.com/valonia/couchmate-youtube), [couchmate-iptv-dispatcharr](https://github.com/valonia/couchmate-iptv-dispatcharr), [couchmate-spotify-youtube](https://github.com/valonia/couchmate-spotify-youtube), [couchmate-rqbit](https://github.com/valonia/couchmate-rqbit) | Plugins – installed from the admin panel |
 
 ## 1. Start the server
 
@@ -36,13 +37,18 @@ Open `http://<server>:8787/admin`:
 1. **Create the admin password.** The first person to open the panel creates it, so do this straight away.
 2. **Settings → PIN code.** The apps cannot connect until a PIN is set.
 3. **Plugins → Get plugins.** Install the plugins you want from GitHub, switch them on and fill in their
-   settings. Each plugin can update by itself (**Update automatically**) when a new version is released.
+   settings. Each plugin can update by itself (**Update automatically**) when a new version is released. Updates
+   wait until nobody is watching, so nobody is thrown out mid-film.
    - **IPTV** needs [Dispatcharr](https://github.com/Dispatcharr/Dispatcharr) with an Xtream user.
    - **Twitch** and **YouTube** work straight away.
+   - **rqbit** (torrents) needs [rqbit](https://github.com/ikatson/rqbit) running next to the server.
 4. **App menu** sets the order of the menu in the apps and of the groups on the Favorites screen.
 
-The panel also shows what is playing and who is connected, lets you manage reminders, favourites and history,
+The panel also shows what is playing and who is connected (and lets you rename them), lets you manage reminders, favourites and history,
 hosts the app downloads (`http://<server>:8787/download`) and shows the server log live.
+
+**Settings → Developer mode** is for writing plugins: plugin updates are checked every 5 minutes and installed
+straight away, also while someone is watching.
 
 ### Friends outside your home network
 Forward a port to the server, preferably behind a reverse proxy with HTTPS (Caddy or Nginx) since the PIN is
@@ -68,8 +74,10 @@ Names and content (channel names, titles) are never translated. See [PLUGINS.md]
   (at most 12 s, configurable). Then everyone starts at exactly the same server time.
 - **While playing:** every device compares its position with the expected one. Small differences (over 0.3 s) are
   corrected by playing 1–8 % faster or slower, so it is not noticeable. Large ones (over 2 s) are corrected with a seek.
-- **Songs that follow straight on:** for music, "next" shows 10 s before the end; the apps buffer the next song and
-  it starts without a pause when every app has it.
+- **Next episode or song:** "next" shows 10 s before the end (a plugin can choose how long); the apps buffer the next
+  item and it starts without a pause when every app has it.
+- **Nobody watching:** when no app has been open for a minute, playback pauses where it is, so everyone comes back
+  to where they stopped. Live TV is left alone.
 - **Live:** everyone watches the same channel, but live streams cannot be seeked, so devices can differ by 1–5 s
   depending on buffering.
 
