@@ -345,7 +345,7 @@ async function renderSettings(main) {
 async function renderPlugins(main) {
   let d = await api('/plugins');
   const listEl = h('div', { class: 'grid' });
-  const catalogEl = h('div', { class: 'bundled-list' }, h('span', { class: 'faint' }, 'Asking GitHub…'));
+  const catalogEl = h('div', { class: 'catalog' }, h('span', { class: 'faint' }, 'Asking GitHub…'));
   const picker = h('input', { type: 'file', accept: '.zip', hidden: true, onchange: run(async () => {
     const f = picker.files[0];
     if (!f) return;
@@ -480,14 +480,15 @@ async function renderPlugins(main) {
         : !catalog ? h('span', { class: 'faint' }, 'Asking GitHub…')
           : catalog.length ? catalog.map((c) => {
             const inst = installedIds.get(c.id);
-            return h('div', { class: 'bundled' },
-              h('div', { class: 'grow' },
-                h('div', {}, h('b', {}, c.name), h('span', { class: 'faint' }, `  v${c.version}`)),
-                h('div', { class: 'faint', style: { fontSize: '13px' } }, c.description),
-                c.needs?.length ? h('div', { style: { fontSize: '13px' } }, `Needs: ${c.needs.map((n) => n.name).join(', ')}`) : null,
-                h('a', { href: `https://github.com/${c.repo}`, target: '_blank', rel: 'noopener', style: { fontSize: '12px' } }, `github.com/${c.repo} ↗`)),
-              inst ? h('span', { class: 'pill ok' }, 'Installed')
-                : h('button', { class: 'btn small primary', onclick: install(c.repo, c.name) }, 'Install'));
+            return h('div', { class: 'cat-item' },
+              h('div', { class: 'cat-head' },
+                h('b', {}, c.name), h('span', { class: 'faint' }, `v${c.version}`),
+                h('a', { href: `https://github.com/${c.repo}`, target: '_blank', rel: 'noopener', title: `github.com/${c.repo}` }, '↗'),
+                h('span', { class: 'grow' }),
+                inst ? h('span', { class: 'pill ok' }, 'Installed')
+                  : h('button', { class: 'btn small primary', onclick: install(c.repo, c.name) }, 'Install')),
+              h('div', { class: 'cat-desc', title: c.description }, c.description),
+              c.needs?.length ? h('div', { class: 'cat-needs' }, `Needs: ${c.needs.map((n) => n.name).join(', ')}`) : null);
           }) : h('span', { class: 'faint' }, 'No plugins found on GitHub.'),
       fromRepo);
   }
